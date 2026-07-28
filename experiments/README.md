@@ -1,0 +1,65 @@
+# experiments
+
+Throwaway trials: quick spikes, one-off scripts, half-finished attempts at
+proving or disproving an idea before it's worth writing up properly.
+Nothing in here is expected to be maintained, documented for others, or
+kept working across commits — it can be deleted at any time.
+
+This is also the open-questions ledger for nixstorage's own judgment
+calls — every entry below corresponds to a default or design choice that's
+reasoned, not yet measured against a second, independent real pool.
+
+When an experiment produces a real finding worth keeping, promote the
+write-up to [`../studies/`](../studies/README.md) and either delete the
+experiment or leave it as supporting evidence linked from the study.
+
+## 001 — is the `subtreeMountable` ancestor-chain check sufficient on its own?
+
+**Question:** `modules/shape.nix`'s ancestor-chain assertion for
+`subtreeMountable` only ever sees ancestors that are THEMSELVES declared in
+`nixstorage.shape.datasets` (see that option's own description). A pool's
+bare mountpoint, or any directory above a declared tree that this repo was
+never told about, is outside what the assertion can verify. Is that gap
+worth closing with something stronger than a documentation caveat — for
+instance, a runtime check (a boot-time oneshot that walks `stat()` up from
+each `subtreeMountable` dataset to the pool root and warns on the first
+non-traversable directory it finds, the same "advisory, never fatal"
+pattern nixid's own `exposeOnInterfaces` check uses)?
+
+**Hypothesis:** probably yes, eventually — the failure mode (an
+undeclared grandparent silently breaking the traversal guarantee) is
+exactly the kind of thing that reads as "this should have been caught" in
+hindsight. Not done for the initial scaffold because it needs a real ZFS
+pool with a real mount hierarchy to validate against, not just module
+evaluation.
+
+**Method sketch:** on a real pool, declare a `subtreeMountable` dataset
+several levels deep, deliberately leave one intermediate directory (not
+itself a `nixstorage.shape.datasets` entry — e.g. the bind-mount point of a
+foreign filesystem) non-traversable, and confirm the eval-time assertion
+stays silent while an actual `mount` attempt from a `root_squash` NFS
+client fails. If that reproduces cleanly, the runtime check earns its
+keep.
+
+**Status:** open. No real pool has run this repo yet.
+
+## 002 — should `children = "reconcile"` compute a deterministic sweep order?
+
+**Question:** `modules/shape.nix`'s own `children` option description flags
+that Nix attribute sets carry no guaranteed key order, and that a
+reconciler needing deterministic sweep order (e.g. letting a more specific
+descendant's own `"reconcile"` intentionally re-win a subtree after a
+broader ancestor's sweep already touched it) has to compute that itself.
+Is alphabetical-by-dataset-name sufficient, or does a real deployment need
+something depth-aware (shallowest first, so a descendant always applies
+last and wins)?
+
+**Hypothesis:** depth-aware, not alphabetical — a name sort is only
+correct by accident (it happens to put `"tank/agents"` before
+`"tank/agents/models"` because of the string, not because of the
+hierarchy), and a future dataset naming scheme that broke that accident
+would silently invert the intended precedence with no eval-time signal at
+all.
+
+**Status:** open — this belongs to `modules/reconciler.nix`, not yet
+written.
