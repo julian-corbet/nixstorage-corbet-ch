@@ -63,3 +63,41 @@ all.
 
 **Status:** open — this belongs to `modules/reconciler.nix`, not yet
 written.
+
+## 003 — is a fixed 2 MiB `reservedOverheadMiB` the right constant forever?
+
+**Question:** `modules/layout.nix`'s `reservedOverheadMiB` (currently a
+hardcoded `2`) exists so an obviously-too-tight `images.<name>` declaration
+fails at eval time instead of only at image-build time. It was set from one
+real measurement (see `studies/sandboxed-image-building.md`): a ~1 MiB
+leading alignment gap plus a negligible trailing GPT-footer reservation, on
+`sgdisk`'s own DEFAULT 2048-sector alignment. Is `2` still correct if a
+future version of this module ever exposes `sgdisk`'s own `-a`/
+`--set-alignment` override (coarser alignment on some flash media wants a
+bigger unit), or on a sector size other than 512 bytes (4Kn drives)?
+
+**Hypothesis:** probably not without revisiting it — the constant is
+measured against ONE alignment/sector-size combination, not derived
+symbolically from whatever `lib/image.nix` actually asks `sgdisk` for. If
+alignment or sector size ever become configurable, this constant needs to
+become a function of those, not stay a bare number.
+
+**Status:** open. No real 4Kn device, and no alignment override, has been
+exercised against this repo yet.
+
+## 004 — should `nixstorage.layout.verify`'s size tolerance be configurable?
+
+**Question:** `modules/layout-verify.sh` accepts a live partition's size
+within ±1 MiB of its declared `sizeMiB` before calling it drift (see that
+file's own `TOLERANCE_MIB`). That number absorbs the SAME alignment
+rounding `reservedOverheadMiB` above is about, from the other direction --
+generous enough that a device written by this repo's own image builder
+should never spuriously fail, but was never measured against a device
+whose image was built by something OTHER than `lib/image.nix` (a
+hand-`sgdisk`'d disk, or an image built with a different alignment). Is a
+single hardcoded tolerance right for every declared target, or does a
+target sometimes need its own, especially once experiment 003's alignment
+question is resolved?
+
+**Status:** open. No real drift case from a foreign image-building tool has
+been reproduced against this check yet.

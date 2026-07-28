@@ -5,14 +5,16 @@
 # This is not a machine anyone would run: the pool is called "tank", the
 # domain is example.org, and the root filesystem is tmpfs. Every real,
 # already-implemented option in modules/shape.nix, modules/delivery.nix,
-# and modules/reconciler.nix gets exercised at least once here, including
-# the ones that are easy to get backwards -- `subtreeMountable`'s
-# ancestor-chain requirement (checked TWICE, independently, by shape.nix's
-# own boolean-consistency assertion and reconciler.nix's mode-VALUE
-# assertion — see reconciler.nix's own comment for why one does not make
-# the other redundant), `prune` excluding one child from every bulk walk
-# (shape's own recordsize/compression sweep AND the ownership reconciler's
-# chown walk, both), and the `reconcile = false` carve-out.
+# modules/reconciler.nix, and modules/layout.nix gets exercised at least
+# once here, including the ones that are easy to get backwards --
+# `subtreeMountable`'s ancestor-chain requirement (checked TWICE,
+# independently, by shape.nix's own boolean-consistency assertion and
+# reconciler.nix's mode-VALUE assertion — see reconciler.nix's own comment
+# for why one does not make the other redundant), `prune` excluding one
+# child from every bulk walk (shape's own recordsize/compression sweep AND
+# the ownership reconciler's chown walk, both), the `reconcile = false`
+# carve-out, and layout's own "only the last partition may consume the
+# remainder" rule.
 #
 # `nixid.posix.*` below is VERIFIED against the shipped module, not
 # anticipated: this example composes with nixid's posix module through
@@ -262,6 +264,52 @@
   # and every ACL-touching syscall then pays a failed kernel upcall while
   # plain ownership keeps working -- which is exactly why it goes unnoticed.
   nixid.posix.domain = "example.org";
+
+  # ── LAYOUT: how media is CARVED -- partition tables, sizes, roles ------
+  # A single small image with all three sanctioned roles: an ESP (the
+  # only role that gets real filesystem content -- vfat, empty), a raw
+  # slot (reserved, untouched -- would eventually hold, say, a ZFS pool
+  # member this repo's own shape.nix has no opinion on because it isn't a
+  # mountable dataset yet), and a trailing encrypted region consuming
+  # whatever is left (reserved, never `cryptsetup luksFormat`-ed by this
+  # repo -- see modules/layout.nix's own header for exactly why).
+  nixstorage.layout.images.example-host-disk = {
+    sizeMiB = 512;
+    partitions = [
+      {
+        name = "ESP";
+        role = "esp";
+        sizeMiB = 256;
+        espLabel = "EXAMPLEESP";
+      }
+      {
+        name = "pool-member";
+        role = "raw";
+        sizeMiB = 128;
+      }
+      # The LAST partition in the list, and the only one allowed to leave
+      # sizeMiB unset -- consumes whatever remains of the 512 MiB image
+      # after the ESP and the raw slot above, minus GPT's own overhead.
+      {
+        name = "vault";
+        role = "luks";
+      }
+    ];
+  };
+
+  # `nixstorage-layout-verify` never writes anything -- see this option's
+  # own description and modules/layout.nix's header for the full safety
+  # model. `device` is a placeholder /dev/disk/by-id path precisely
+  # because a real one here would be exactly the kind of fleet detail a
+  # public repo must never carry; `nix flake check`'s own checks/
+  # directory proves the verify SCRIPT itself actually works, against a
+  # real built image, without ever touching a real device.
+  nixstorage.layout.verify.enable = true;
+  nixstorage.layout.verify.onCalendar = "daily";
+  nixstorage.layout.verify.targets.example-host-disk = {
+    device = "/dev/disk/by-id/example-host-disk-uuid";
+    image = "example-host-disk";
+  };
 
   nixid.posix.identities = {
     # Referenced only as a ROOT owner/group above (no leaf uses it) --

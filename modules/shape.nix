@@ -3,23 +3,54 @@
 # The SHAPE half of nixstorage: `options.nixstorage.shape` declares, for a
 # handful of dataset CLASSES, what ZFS properties every dataset of that
 # class should converge to, and then assigns real datasets to those
-# classes. It is schema and validation only -- there is no service here,
-# no systemd unit, nothing "enabled". A reconciler consuming this data
-# (deliberately a separate module, not this one -- see the repo root
-# README for the split) is the thing that actually runs `zfs set`; this
-# file exists so that reconciler, and every human reading the config, has
-# exactly one place to look up what a dataset is supposed to look like.
+# classes. THIS FILE is schema and validation only -- there is no service
+# here, no systemd unit, nothing "enabled" in modules/shape.nix itself.
 #
-# INVARIANT, load-bearing for anything that consumes `nixstorage.shape.*`:
-# convergence may set properties on an EXISTING dataset. It must NEVER
-# destroy or (re)create one. A dataset that should exist but doesn't is a
-# provisioning problem for a human or a different tool to solve; treating
-# an absent dataset as "just create it" from inside a property-convergence
-# pass is how a typo in this file turns into data loss instead of a loud,
-# obvious eval-time or run-time error. If your reconciler needs to create
-# datasets too, that is a second, explicitly separate, explicitly gated
-# operation -- never a side effect of running the same pass that also sets
-# recordsize/compression.
+# That claim is deliberately scoped to this one file, and the scope is
+# worth stating in so many words rather than leaving it to be inferred:
+# nixstorage AS A REPO is not entirely inert. modules/reconciler.nix ships
+# a real systemd oneshot (+ optional timer) that runs actual `chown`/
+# `chmod` against live paths, and modules/layout.nix ships a real, if
+# strictly read-only, verify pass that reads a live block device. Neither
+# fact contradicts what this file says about ITSELF -- both live in their
+# OWN file, behind their OWN `enable`, and neither one folds "is this in
+# the model" (schema -- what THIS file is) together with "does something
+# act on it" (a service -- what a DIFFERENT file is) inside one option
+# surface. See the repo root README's "The modules" section for the full
+# split and why a single file that wore all of these hats at once was the
+# exact problem this repo was extracted to fix.
+#
+# A reconciler consuming THIS module's own data (recordsize/compression) --
+# running the actual `zfs set` calls -- would be a separate module again,
+# following the identical pattern, and it does not exist yet: see the
+# README's own Status section for the honest gap. modules/reconciler.nix's
+# shipped reconciler converges ownership and top-directory mode only, never
+# `zfs set`. This file exists so that a future shape-reconciler, whenever
+# it lands, and every human reading the config in the meantime, has exactly
+# one place to look up what a dataset is supposed to look like.
+#
+# INVARIANT, load-bearing for anything that consumes `nixstorage.shape.*`,
+# and already upheld by every acting module this repo ships today -- not
+# merely promised here for one that doesn't exist yet: convergence may set
+# properties on an EXISTING dataset. It must NEVER destroy or (re)create
+# one. A dataset that should exist but doesn't is a provisioning problem
+# for a human or a different tool to solve; treating an absent dataset as
+# "just create it" from inside a property-convergence pass is how a typo in
+# this file turns into data loss instead of a loud, obvious eval-time or
+# run-time error. modules/reconciler.nix's own reconcile.sh already honours
+# this today, in code, not just in theory -- it refuses to act on a
+# declared root or leaf that is absent on disk (`[ ! -d "$path" ]` -> skip,
+# logged, never created) rather than provisioning one on the spot.
+#
+# If your reconciler needs to create datasets -- or, one layer further
+# down, needs to partition and format the media a dataset will eventually
+# live on at all -- that is a SECOND, explicitly separate, explicitly gated
+# operation, never a side effect of running the same pass that also sets
+# recordsize/compression. `modules/layout.nix` (how media are CARVED --
+# partition tables, sizes, roles) is exactly that second operation for the
+# provisioning half of this story, and it keeps its own, sharper safety
+# model on top of the same principle: see that file's own header for why
+# it never touches a block device at all, only ever a plain file.
 #
 # Why classes exist at all, and why getting one wrong is expensive:
 # `recordsize` is the single biggest ZFS tuning knob for anything that
@@ -136,7 +167,7 @@ let
             '';
           })
           (ancestorsOf name))
-      )
+    )
     datasetNames;
 
   classModule = { ... }: {

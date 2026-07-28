@@ -22,16 +22,16 @@ duplicating the uid/gid or reaching into a file that had no business
 knowing about pods. Splitting it was not a refactor for its own sake; it
 was the fix for a coupling that had already started to bite.
 
-## The three modules
+## The four modules
 
 - **`modules/shape.nix`** (`nixstorage.shape`) — named dataset **classes**
   (`recordsize`, `compression`, and any other ZFS property via the
   free-form `properties` field) and the real **datasets** assigned to
   them. Pure schema and eval-time assertion — there is no systemd unit
-  here, nothing to "enable". A typo'd class name, a `subtreeMountable`
-  dataset whose declared ancestor isn't also traversable — both fail
-  `nix flake check` by name, not silently at 3am when a reconciler run
-  does the wrong thing.
+  in THIS FILE, nothing to "enable" here. A typo'd class name, a
+  `subtreeMountable` dataset whose declared ancestor isn't also
+  traversable — both fail `nix flake check` by name, not silently at 3am
+  when a reconciler run does the wrong thing.
 - **`modules/delivery.nix`** (`nixstorage.delivery`) — named **categories**:
   what a human sitting at `$HOME`, or a container reading its own mount
   table, actually sees. A category names a host path, the `$HOME/<leaf>`
@@ -41,8 +41,8 @@ was the fix for a coupling that had already started to bite.
   Also pure schema and assertion, same as `shape.nix`. It does not mount,
   export, bind, or symlink anything — see
   [Non-goals](#non-goals).
-- **`modules/reconciler.nix`** (`nixstorage.reconciler`) — the module that
-  actually acts, today scoped to **ownership and top-directory mode**:
+- **`modules/reconciler.nix`** (`nixstorage.reconciler`) — the first module
+  that actually acts, scoped to **ownership and top-directory mode**:
   declares tree `ownership` roots and per-app `leaves`, resolves each
   one's `owner`/`group`/`identity` name against `nixid.posix.identities`/
   `.groups`, and idempotently `chown -h`/`chmod`s real, live paths to
@@ -52,17 +52,66 @@ was the fix for a coupling that had already started to bite.
   `shape.nix`'s own declared model, and (see [Status](#status)) does not
   yet have a reconciler of its own actually applying it; this module's
   job stops at ownership and mode.
+- **`modules/layout.nix`** (`nixstorage.layout`) — the second acting
+  module, and the provisioning half `shape.nix`'s own header explicitly
+  refuses to be: how a piece of media is **carved** — a partition table,
+  sizes, roles (an ESP, a raw slot, an encrypted region). `images.<name>`
+  renders a declaration and emits an image: a pure derivation producing a
+  plain FILE, never a device. `verify` is the one thing this module lets
+  run against real, live media, and it only ever *reads* — `sfdisk --json`,
+  never a write — reporting PASS/FAIL/SKIP drift against the declared
+  model. See [The safety model](#the-safety-model-nixstorage-never-touches-a-block-device)
+  below; this is the module the whole repo's "no service here" claim had
+  to be made honest about, not just repeated.
 
 Each is independently toggleable: import `shape` alone to get a validated,
 machine-readable dataset model with zero runtime footprint (useful as
 documentation, or as an input to a completely different reconciler you
 already run); import `delivery` alone for the same on the `$HOME`/XDG
-side; import all three (`nixosModules.default`) for the common case of
+side; import all four (`nixosModules.default`) for the common case of
 wanting the whole thing to actually converge. Nothing here is a lumped
 `nixstorage.enable` — see `modules/shape.nix` and `modules/delivery.nix`
 for why neither even has an `enable` option: there is nothing running to
 turn on, only a schema to validate, so the act of importing the file *is*
-the toggle.
+the toggle. `reconciler` and `layout` each carry their own `enable`
+instead, because each of them genuinely does have something to turn on.
+
+## The safety model: nixstorage never touches a block device
+
+Stated once, here, because it is the invariant every option and every
+script in `modules/layout.nix` exists to uphold, and the reason this repo
+can carry a module that creates media at all without contradicting
+`shape.nix`'s own "never destroy or (re)create" stance:
+
+- **Building an image touches only a plain file.** `nixstorage.layout.images.<name>.result`
+  is a pure Nix derivation (`lib/image.nix`): `sgdisk`/`sfdisk` write a GPT
+  table directly into an ordinary file (GPT tools do their own file I/O at
+  whatever byte offset the table says — they never require the target to
+  *be* a device node), and `mkfs.vfat -C` *creates* a correctly-sized file
+  from nothing for the one role (`esp`) that gets real filesystem content.
+  No loop device, no `mount`, no root privilege, anywhere in this path. A
+  bug here produces a bad file. It cannot produce a lost pool, because
+  there is no pool, and no device, anywhere in its reach.
+- **Writing that image to real media is a human act, outside this repo.**
+  There is no `nixstorage-layout-write` tool. `dd`, or whatever a human's
+  own tooling looks like, happens after this module is done — the same
+  boundary nixvault's own `SCOPE` note draws around `nixvault.device`
+  ("provisioning that device is a disk-layout tool's job") and nixboot's
+  own ESP section draws around itself ("declared, never created —
+  nixboot does not partition"). `nixstorage.layout` is that disk-layout
+  tool, on both sides of that boundary.
+- **The one thing that reads a live device only ever reads it.**
+  `nixstorage-layout-verify` (`nixstorage.layout.verify`) runs `sfdisk
+  --json` — a listing command — against a device, and reports drift
+  against the declaration. It never writes. Device identity is always a
+  stable `/dev/disk/by-*` symlink, never a raw `/dev/sdX`/`/dev/nvmeXnY`,
+  checked twice: once by an eval-time assertion, once again, defensively,
+  by the runtime script itself.
+- **Never a side effect of activation.** Neither building an image nor
+  running the verify pass is wired to `nixos-rebuild switch`, boot, or any
+  other activation path — see `nixstorage.layout.verify.enable`/
+  `.onCalendar` for exactly how (and how not) the verify tool is reachable,
+  mirroring `nixstorage.reconciler`'s own `enable`/`onCalendar` shape.
 
 ## Why nixstorage depends on nixid, and never the reverse
 
@@ -126,6 +175,11 @@ correctly.
   USB-image builds — [nixnas](https://github.com/julian-corbet/nixnas)'s
   job. `nixstorage` is a set of NixOS/system-manager modules any host can
   import; it has no opinion on how that host got to a running kernel.
+- **It never touches a block device.** `nixstorage.layout.images.<name>`
+  builds a plain file. Writing that file to real media is a human act
+  this repo deliberately does not perform — see
+  [The safety model](#the-safety-model-nixstorage-never-touches-a-block-device).
+  `nixstorage.layout.verify` reads a live device back, and only ever reads.
 
 ## The traversability finding
 
@@ -196,6 +250,7 @@ silently assumed safe (see `experiments/README.md` #001).
         nixstorage.nixosModules.shape
         nixstorage.nixosModules.delivery
         nixstorage.nixosModules.reconciler
+        nixstorage.nixosModules.layout
         nixid.nixosModules.posix # the "who" this repo consumes by name
         ./configuration.nix
       ];
@@ -231,6 +286,23 @@ nixstorage.reconciler.leaves."/tank/apps/data" = {
 };
 
 nixid.posix.identities.example-app = { uid = 3002; variant = "native"; };
+
+# LAYOUT: how the media this pool lives on was carved -- an ESP, a raw
+# slot, and a trailing encrypted region consuming whatever is left.
+nixstorage.layout.images.example-host-disk = {
+  sizeMiB = 512;
+  partitions = [
+    { name = "ESP"; role = "esp"; sizeMiB = 256; espLabel = "EXAMPLEESP"; }
+    { name = "pool-member"; role = "raw"; sizeMiB = 128; }
+    { name = "vault"; role = "luks"; } # last entry: consumes the remainder
+  ];
+};
+
+nixstorage.layout.verify.enable = true;
+nixstorage.layout.verify.targets.example-host-disk = {
+  device = "/dev/disk/by-id/example-host-disk-uuid";
+  image = "example-host-disk";
+};
 ```
 
 ## Options reference
@@ -323,9 +395,44 @@ ownership + top-directory mode only, via `modules/reconcile.sh`):
   reconciled *and* in the effective prune set is an assertion failure —
   `prune` means genuinely hands-off, not "reconciled independently".
 
-`nixid.posix.identities.<name>` (a different repo — not yet shipped; the
-shape below is `modules/reconciler.nix`'s own declared cross-repo contract,
-not this scaffold's invention):
+`nixstorage.layout.*` (`modules/layout.nix` — real: `images` is a pure
+derivation builder, `verify` is a real, read-only pass via
+`modules/layout-verify.sh`; see
+[The safety model](#the-safety-model-nixstorage-never-touches-a-block-device)):
+
+- `images.<name>.sizeMiB` — the image's total size, in MiB. No default
+  (asserted) — as host/device-specific as nixboot's `loader.efiVariables`
+  or nixvault's `device`.
+- `images.<name>.partitions` — the partition table, in on-disk order.
+  Each entry: `name` (its GPT partition name, unique within the image;
+  asserted), `role` (one of `lib/partition-roles.nix`'s catalogue —
+  `"esp"`, `"raw"`, `"luks"`; resolves the GPT type-GUID, never restated
+  by hand), `sizeMiB` (MiB, or `null` to consume the remainder of the
+  image — legal ONLY for the last entry in the list; asserted), `espLabel`
+  (the FAT volume label; only meaningful — and only accepted — when
+  `role = "esp"`; asserted).
+- `images.<name>.result` — read-only. The built image: a single plain
+  FILE, lazily built (declaring an image costs nothing at eval time
+  beyond the assertions above; nothing forces `result` merely by existing
+  — see the option's own description).
+- `verify.enable` — install `nixstorage-layout-verify` and render its
+  config; with no `onCalendar` set, it only ever runs on manual
+  invocation. Never wired to activation/boot.
+- `verify.onCalendar` (default `null`) — a systemd `OnCalendar=` for a
+  recurring timer. No guessed default cadence, same reasoning as
+  `nixstorage.reconciler.onCalendar` — even a read-only pass against real
+  block devices is an operational decision, not a value this module picks.
+- `verify.targets.<name>.device` — the live device this target's image is
+  expected to already be written to. Always a stable `/dev/disk/by-*`
+  symlink (asserted, and checked again at runtime) — never a raw
+  `/dev/sdX`/`/dev/nvmeXnY`.
+- `verify.targets.<name>.image` — which `images.<name>` this device is
+  expected to match (asserted to reference a declared image).
+
+`nixid.posix.identities.<name>` (a different repo, shipped in
+[nixid](https://github.com/julian-corbet/nixid-corbet-ch); the shape below
+is `modules/reconciler.nix`'s own declared cross-repo contract, not this
+scaffold's invention):
 
 - `uid`, `gid` (`null` default — a User Private Group, numerically equal
   to `uid`) — the on-disk ownership a `nixstorage.reconciler` leaf (or a
@@ -355,57 +462,71 @@ not this scaffold's invention):
 
 | Path | What |
 |---|---|
-| `flake.nix` | `nixosModules.{shape,delivery,reconciler}` + `.default`; same trio under `systemManagerModules.*` |
+| `flake.nix` | `nixosModules.{shape,delivery,reconciler,layout}` + `.default`; same quartet under `systemManagerModules.*`; `lib.partitionRoles`/`lib.buildLayoutImage` |
 | `modules/shape.nix` | dataset classes + datasets: `recordsize`/`compression` convergence, `subtreeMountable`, `prune` |
 | `modules/delivery.nix` | categories: `source`/`home`/`xdg`/`scope`/`mount` |
 | `modules/reconciler.nix` | Nix side: `nixstorage.reconciler` options, renders the JSON `reconcile.sh` reads |
 | `modules/reconcile.sh` | runtime side: the actual idempotent `chown -h`/`chmod` pass, roots-then-leaves, mis-owned-only |
+| `modules/layout.nix` | Nix side: `nixstorage.layout` options (images + verify), renders the JSON `layout-verify.sh` reads |
+| `modules/layout-verify.sh` | runtime side: the read-only `sfdisk --json` drift check, PASS/FAIL/SKIP per partition |
+| `lib/partition-roles.nix` | the fixed role catalogue (`esp`/`raw`/`luks`) — GPT type-GUID + what, if anything, gets formatted |
+| `lib/image.nix` | the image builder: a resolved partition list -> one raw disk image, a pure derivation |
 | `examples/host/` | a minimal composed system exercising every implemented option, used by `nix flake check` |
+| `checks/` | eval-time behavioral tests, plus two real build-level proofs (the image builder actually builds; the verify script actually detects drift) |
 | `experiments/` | open questions and unmeasured defaults |
-| `studies/` | write-ups, including the traversability measurement above |
+| `studies/` | write-ups, including the traversability measurement and the sandboxed-image-building technique |
 | `LICENSE` | MIT |
 
 ## Status
 
 **Pre-alpha, split still landing.** `modules/shape.nix`, `modules/delivery.nix`,
-and `modules/reconciler.nix` (+ `modules/reconcile.sh`, its runtime half)
+`modules/reconciler.nix` (+ `modules/reconcile.sh`), and `modules/layout.nix`
+(+ `modules/layout-verify.sh`, `lib/image.nix`, `lib/partition-roles.nix`)
 are all real, checked-in — pure schema and eval-time assertion for the
-first two, an actual idempotent `chown -h`/`chmod` pass for the third:
-roots swept before leaves, leaves sorted shallowest-path-first so nesting
-resolves correctly, mis-owned-only comparisons so a converged tree costs
-one `find` walk and zero syscalls in steady state, `-h` always (never
-following a symlink — see `reconcile.sh`'s own header for the real
-incident this specific flag traces back to), and a `reconcile = false`
-carve-out reported, never acted on. All three were extracted and
-generalized from a working deployment's own dataset-class, category, and
-ownership maps, every site-specific value replaced with a generic one.
+first two, an actual idempotent `chown -h`/`chmod` pass for the third,
+a real image-building derivation plus a real, read-only drift check for
+the fourth: roots swept before leaves, leaves sorted shallowest-path-first
+so nesting resolves correctly, mis-owned-only comparisons so a converged
+tree costs one `find` walk and zero syscalls in steady state, `-h` always
+(never following a symlink — see `reconcile.sh`'s own header for the real
+incident this specific flag traces back to), a `reconcile = false`
+carve-out reported never acted on, and — on the layout side —
+`sgdisk`/`sfdisk`/`mkfs.vfat -C` operating only ever on a plain file, never
+a device, with a build-level proof in `checks/` that the built image is
+byte-correct (size, partition table, a valid FAT filesystem in the one
+role that gets one, every other role left provably all-zero) and that
+`nixstorage-layout-verify` genuinely tells a clean match from a drifted
+one. `shape`, `delivery`, and `reconciler` were extracted and generalized
+from a working deployment's own dataset-class, category, and ownership
+maps, every site-specific value replaced with a generic one; `layout` is
+new, built directly against the safety model the operator specifically
+endorsed for it (see [The safety model](#the-safety-model-nixstorage-never-touches-a-block-device)).
 
 **Known gap, stated plainly rather than glossed over:** `reconciler.nix`,
 as it stands, converges **ownership and top-directory mode only** — it
 does not itself run `zfs set recordsize=…`/`compression=…` against
 anything in `nixstorage.shape.classes`/`.datasets`. `shape.nix`'s own
 header describes that convergence as "a reconciler consuming this data"'s
-job; whether that becomes a fourth piece of this repo or folds into
+job; whether that becomes a fifth piece of this repo or folds into
 `reconciler.nix` itself is genuinely open, not decided by this scaffold.
 
 The RIGHTS half of the design — `nixid.posix.identities.<name>` (uid/gid/
 variant/reconcile) plus its derived `nixid.posix.podSecurity.<name>`
-twin — has not shipped in
-[nixid](https://github.com/julian-corbet/nixid-corbet-ch) yet.
-`examples/host/configuration.nix` and this README's Quickstart show the
-intended shape of it, written directly against the cross-repo contract
-`modules/reconciler.nix` itself already declares in its own header (not
-invented independently of it) — but until `nixid.posix` actually ships,
-`nix flake check` will not pass; `modules-evaluate`'s job once it does is
-exactly what it is in every sibling repo here: catch a type error, a
-failed assertion, or an option rename across the whole composed system at
-once.
+twin — has since shipped in
+[nixid](https://github.com/julian-corbet/nixid-corbet-ch)
+(`nixosModules.posix`), matching the cross-repo contract
+`modules/reconciler.nix` had already declared in its own header before
+that landed (not invented independently of it). `checks/` composes it for
+real now — `modules-evaluate` catches a type error, a failed assertion, or
+an option rename across the whole composed system at once, on both sides
+of that contract.
 
 - [x] `nixosModules.shape` (`modules/shape.nix`)
 - [x] `nixosModules.delivery` (`modules/delivery.nix`)
 - [x] `nixosModules.reconciler` (`modules/reconciler.nix` + `modules/reconcile.sh`) — ownership/mode only, see the gap noted above
+- [x] `nixosModules.layout` (`modules/layout.nix` + `modules/layout-verify.sh` + `lib/image.nix` + `lib/partition-roles.nix`) — image build + read-only verify; never a block-device write, see the safety model above
 - [ ] a reconciler for `nixstorage.shape`'s own `recordsize`/`compression` model
-- [ ] `nixid.posix` (a different repo — the RIGHTS half of this same design)
+- [x] `nixid.posix` (a different repo — the RIGHTS half of this same design) — shipped
 
 ## Related projects
 
