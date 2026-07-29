@@ -328,6 +328,38 @@ let
         '';
       };
 
+      sectorSize = mkOption {
+        type = types.enum [ 512 4096 ];
+        default = 4096;
+        example = 512;
+        description = ''
+          The LOGICAL sector size of the medium this image is written to.
+
+          THE POLICY: 4Kn is the default and the preferred shape. Use 512 only
+          where the drive is natively 512e/512n, or where something downstream
+          mandates it. Check the target before declaring:
+          `cat /sys/block/<dev>/queue/logical_block_size`.
+
+          THIS IS NOT COSMETIC. A GPT stores every partition boundary as a
+          SECTOR NUMBER, so an identical table describes a byte layout eight
+          times larger at 4096 than at 512. An image built for the wrong sector
+          size does not degrade gracefully -- the header LBAs, the partition
+          entries and the backup-header location all land at the wrong offsets,
+          and the medium is not readable as partitioned at all.
+
+          Real example from this fleet: the nixnas rescue stick is 512/512, and
+          the Elitebook's NVMe is 4096/4096. The SAME declared layout therefore
+          cannot produce one image serving both -- it needs two, differing only
+          in this value.
+
+          Mechanically, 4096 also changes which tool builds the table: `sgdisk`
+          has no sector-size override when operating on a plain file (it assumes
+          512, because normally it asks the kernel and a file has nobody to ask),
+          so the 4Kn path uses `sfdisk --sector-size 4096` instead. See
+          ../lib/image.nix for why the 512 path deliberately stays on sgdisk.
+        '';
+      };
+
       partitions = mkOption {
         type = types.listOf (types.submodule partitionModule);
         default = [ ];
@@ -366,6 +398,7 @@ let
     # function value, defined in, and lexically scoped to, this file).
     config.result = buildImage {
       inherit name;
+      inherit (config) sectorSize;
       sizeMiB = if config.sizeMiB == null then 1 else config.sizeMiB;
       partitions = map resolvePartition config.partitions;
     };

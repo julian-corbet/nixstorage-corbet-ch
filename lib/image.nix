@@ -28,12 +28,31 @@
 # either one's data region.
 { pkgs }:
 
-{ name, sizeMiB, partitions }:
+{ name, sizeMiB, partitions, sectorSize ? 512 }:
 
 let
   lib = pkgs.lib;
 
   sizeBytes = sizeMiB * 1024 * 1024;
+
+  # SECTOR SIZE IS NOT COSMETIC AND CANNOT BE LEFT TO THE TOOL'S DEFAULT.
+  #
+  # A GPT stores every start/end as a SECTOR NUMBER, so the same table means a
+  # different byte layout at 512 than at 4096 -- by a factor of eight. An image
+  # built at 512 and written to a 4Kn device does not "mostly work": the header
+  # LBAs, the partition entries and the backup-header location all land wrong.
+  #
+  # `sgdisk` has NO sector-size override when operating on a plain FILE -- it
+  # assumes 512 unconditionally, because it normally asks the kernel and a file
+  # has nobody to ask. That is why 4Kn takes a different tool rather than a
+  # different flag: `sfdisk --sector-size` is the one that can be told.
+  #
+  # The 512 path is deliberately left on sgdisk rather than unified onto sfdisk:
+  # this builder's alignment behaviour was MEASURED against sgdisk (see the file
+  # header and studies/), and the readback below re-queries sgdisk rather than
+  # re-deriving its arithmetic. Rewriting the proven path to gain symmetry would
+  # trade a measured basis for a tidier-looking one.
+  is4k = sectorSize == 4096;
 
   indexed = lib.imap1 (i: p: p // { index = i; }) partitions;
 
@@ -60,22 +79,31 @@ let
 
   formatEspPartition = p: ''
     echo "nixstorage-layout: formatting partition ${toString p.index} (\"${p.name}\") as vfat..."
+    ${if is4k then ''
+    start_sector="$(sfdisk --sector-size 4096 --json "$out" | jq -r '.partitiontable.partitions[${toString (p.index - 1)}].start')"
+    size_sectors="$(sfdisk --sector-size 4096 --json "$out" | jq -r '.partitiontable.partitions[${toString (p.index - 1)}].size')"
+    '' else ''
     start_sector="$(sgdisk -i ${toString p.index} "$out" | awk '/^First sector/ {print $3}')"
     size_sectors="$(sgdisk -i ${toString p.index} "$out" | awk '/^Partition size/ {print $3}')"
-    size_kib=$(( size_sectors * 512 / 1024 ))
+    ''}
+    size_kib=$(( size_sectors * ${toString sectorSize} / 1024 ))
     # `-u`: a unique PATH only, never the file itself -- `mkfs.vfat -C`
     # creates the file from nothing and refuses if it already exists, so
     # a plain `mktemp` (which pre-creates an empty file) would collide
     # with it (measured: "mkfs.vfat: file ... already exists").
     esp_tmp="$(mktemp -u)"
     mkfs.vfat ${lib.optionalString (p.espLabel != null) "-n ${lib.escapeShellArg p.espLabel}"} -C "$esp_tmp" "$size_kib" >&2
-    dd if="$esp_tmp" of="$out" bs=512 seek="$start_sector" conv=notrunc,fsync status=none
+    # bs MUST be the medium's sector size: `seek` counts BLOCKS OF bs, and
+    # start_sector is expressed in sectors. Mixing the two writes the ESP to
+    # one eighth of its intended offset on a 4Kn image.
+    dd if="$esp_tmp" of="$out" bs=${toString sectorSize} seek="$start_sector" conv=notrunc,fsync status=none
     rm -f "$esp_tmp"
   '';
 in
 pkgs.runCommand "nixstorage-layout-${name}.img"
 {
-  nativeBuildInputs = [ pkgs.gptfdisk pkgs.dosfstools ];
+  nativeBuildInputs = [ pkgs.gptfdisk pkgs.dosfstools ]
+    ++ lib.optionals is4k [ pkgs.util-linux pkgs.jq ];
 }
   ''
     set -euo pipefail
@@ -84,9 +112,17 @@ pkgs.runCommand "nixstorage-layout-${name}.img"
     # ever touches. There is no device node anywhere in this build.
     truncate -s ${toString sizeBytes} "$out"
 
-    ${lib.optionalString (sgdiskCreateArgs != [ ]) ''
-      sgdisk ${lib.concatMapStringsSep " " lib.escapeShellArg sgdiskCreateArgs} "$out" >&2
-    ''}
+    ${lib.optionalString (sgdiskCreateArgs != [ ]) (
+      if is4k then ''
+        sfdisk --sector-size 4096 --label gpt "$out" >&2 <<'SFDISK_EOF'
+${lib.concatMapStringsSep "\n" (p:
+  "${if p.sizeMiB == null then "" else "size=${toString (p.sizeMiB * 1024 * 1024 / 4096)}, "}type=${p.typeGuid}, name=\"${p.name}\"")
+  indexed}
+SFDISK_EOF
+      '' else ''
+        sgdisk ${lib.concatMapStringsSep " " lib.escapeShellArg sgdiskCreateArgs} "$out" >&2
+      ''
+    )}
 
     ${lib.concatMapStringsSep "\n" formatEspPartition espPartitions}
 
