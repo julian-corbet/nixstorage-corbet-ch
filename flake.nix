@@ -47,12 +47,14 @@
       nixosModules.shape = ./modules/shape.nix;
       nixosModules.delivery = ./modules/delivery.nix;
       nixosModules.reconciler = ./modules/reconciler.nix;
+      nixosModules.disks = ./modules/disks.nix;
       nixosModules.layout = ./modules/layout.nix;
       nixosModules.default = {
         imports = [
           self.nixosModules.shape
           self.nixosModules.delivery
           self.nixosModules.reconciler
+          self.nixosModules.disks
           self.nixosModules.layout
         ];
       };
