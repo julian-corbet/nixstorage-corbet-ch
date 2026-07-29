@@ -21,7 +21,7 @@
 #   checks/default.nix uses for its fake efibootmgr/findmnt/lsblk, and for
 #   the identical reason (a real ESP/NVRAM there, a real block device here,
 #   neither of which a build sandbox has, or should ever be given).
-{ pkgs, lib, nixpkgs, system, nixid, shapeModule, deliveryModule, reconcilerModule, layoutModule }:
+{ pkgs, lib, nixpkgs, system, nixid, shapeModule, deliveryModule, reconcilerModule, disksModule, layoutModule }:
 
 let
   roleCatalogue = import ../lib/partition-roles.nix { };
@@ -58,6 +58,38 @@ let
   # closure (in particular, never forces any `images.*.result` derivation).
   layoutBuildFails = extraConfig:
     !(builtins.tryEval (builtins.seq (evalLayoutOnly extraConfig).system.build.toplevel true)).success;
+
+  # `evalLayoutWithDisks`: the SAME composition, plus `disksModule` -- used
+  # only by the fixtures below that specifically exercise
+  # `nixstorage.disks` itself, or `nixstorage.layout.verify.targets.<name>.
+  # fromDisk` resolving against it. Kept as a second fixture rather than
+  # folding `disksModule` into `evalLayoutOnly` above: `evalLayoutOnly`'s
+  # own existing checks (`verify/by-id-device-builds-fine` and friends) are
+  # what prove `nixosModules.layout` still works with `disks` NEVER
+  # imported at all -- the exact claim modules/layout.nix's own header
+  # makes about `nixosModules.layout` being exported standalone -- and that
+  # proof is only real if those checks run against a fixture that
+  # genuinely has no disks module in it.
+  evalLayoutWithDisks = extraConfig:
+    (import (nixpkgs + "/nixos/lib/eval-config.nix") {
+      inherit system;
+      modules = [
+        shapeModule
+        deliveryModule
+        reconcilerModule
+        disksModule
+        layoutModule
+        extraConfig
+        {
+          boot.loader.grub.enable = false;
+          fileSystems."/" = { device = "none"; fsType = "tmpfs"; };
+          system.stateVersion = "25.05";
+        }
+      ];
+    }).config;
+
+  layoutWithDisksBuildFails = extraConfig:
+    !(builtins.tryEval (builtins.seq (evalLayoutWithDisks extraConfig).system.build.toplevel true)).success;
 
   check = name: ok: detail: { inherit name ok detail; };
 
@@ -230,6 +262,99 @@ let
     (check "verify/service-never-wanted-by-multi-user-target"
       (!(lib.elem "multi-user.target" (cfg-verify-enabled.systemd.services.nixstorage-layout-verify.wantedBy or [ ])))
       "nixstorage-layout-verify.service must never run as a side effect of activation/boot")
+
+    # --- nixstorage.disks: /dev/sdX is refused, /dev/disk/by-* is fine ------
+    (check "disks/raw-devnode-fails-the-build"
+      (layoutWithDisksBuildFails { nixstorage.disks.pool0.device = "/dev/sdb"; })
+      "expected a raw /dev/sdb device path in nixstorage.disks to fail the build, but it succeeded")
+
+    (check "disks/by-id-device-builds-fine"
+      (!(layoutWithDisksBuildFails { nixstorage.disks.pool0.device = "/dev/disk/by-id/example-pool0"; }))
+      "a /dev/disk/by-id/* nixstorage.disks entry should never fail the build on its own")
+
+    # --- nixstorage.disks: one device, two names is refused -----------------
+    # The exact anti-pattern this table exists to remove (see
+    # modules/disks.nix's own header) -- two names resolving to the same
+    # physical disk means two consumers can each believe they own it.
+    (check "disks/duplicate-device-fails-the-build"
+      (layoutWithDisksBuildFails {
+        nixstorage.disks.pool0.device = "/dev/disk/by-id/example-same-disk";
+        nixstorage.disks.pool1.device = "/dev/disk/by-id/example-same-disk";
+      })
+      "expected two nixstorage.disks names sharing one device path to fail the build, but it succeeded")
+
+    (check "disks/distinct-devices-build-fine"
+      (
+        !(layoutWithDisksBuildFails {
+          nixstorage.disks.pool0.device = "/dev/disk/by-id/example-pool0";
+          nixstorage.disks.pool1.device = "/dev/disk/by-id/example-pool1";
+        })
+      )
+      "two nixstorage.disks entries naming two different devices should never fail the build")
+
+    # --- verify.targets.<name>.fromDisk: resolves device by name ------------
+    # The whole point of this option (see modules/layout.nix's own header):
+    # a verify target can name a nixstorage.disks entry instead of
+    # retyping its by-id path a second time within this same repo.
+    (check "layout/fromDisk-resolves-device-from-nixstorage-disks"
+      (
+        let
+          cfg = evalLayoutWithDisks {
+            nixstorage.layout.images = validImages;
+            nixstorage.disks.pool0.device = "/dev/disk/by-id/example-pool0";
+            nixstorage.layout.verify.targets.fixture = {
+              fromDisk = "pool0";
+              image = "fixture";
+            };
+          };
+        in
+        cfg.nixstorage.layout.verify.targets.fixture.device == "/dev/disk/by-id/example-pool0"
+      )
+      "verify.targets.fixture.fromDisk = \"pool0\" did not resolve device from nixstorage.disks.pool0")
+
+    # --- an explicit device always wins over fromDisk's resolution ----------
+    # Non-negotiable per this repo's own design: changing a DEFAULT must
+    # never remove the ability to state the value directly.
+    (check "layout/explicit-device-overrides-fromDisk"
+      (
+        let
+          cfg = evalLayoutWithDisks {
+            nixstorage.layout.images = validImages;
+            nixstorage.disks.pool0.device = "/dev/disk/by-id/example-pool0";
+            nixstorage.layout.verify.targets.fixture = {
+              fromDisk = "pool0";
+              device = "/dev/disk/by-id/example-explicit-override";
+              image = "fixture";
+            };
+          };
+        in
+        cfg.nixstorage.layout.verify.targets.fixture.device == "/dev/disk/by-id/example-explicit-override"
+      )
+      "an explicit verify.targets.fixture.device did not override fromDisk's resolved default")
+
+    # --- fromDisk naming a non-existent nixstorage.disks entry fails --------
+    (check "layout/fromDisk-unresolved-fails-the-build"
+      (layoutWithDisksBuildFails {
+        nixstorage.layout.images = validImages;
+        nixstorage.disks.pool0.device = "/dev/disk/by-id/example-pool0";
+        nixstorage.layout.verify.targets.fixture = {
+          fromDisk = "does-not-exist";
+          image = "fixture";
+        };
+      })
+      "expected fromDisk naming an undeclared nixstorage.disks entry to fail the build, but it succeeded")
+
+    # --- neither device nor fromDisk set still fails, disks module absent --
+    # Proves `nixosModules.layout`'s standalone export claim survives this
+    # change: on a host that never imported disks.nix at all (evalLayoutOnly,
+    # not evalLayoutWithDisks), device stays exactly as required as it was
+    # before fromDisk existed.
+    (check "layout/no-device-no-fromDisk-fails-the-build-without-disks-module"
+      (layoutBuildFails {
+        nixstorage.layout.images = validImages;
+        nixstorage.layout.verify.targets.fixture = { image = "fixture"; };
+      })
+      "expected a verify target with neither device nor fromDisk set to fail the build, but it succeeded")
   ];
 
   failed = builtins.filter (r: !r.ok) results;

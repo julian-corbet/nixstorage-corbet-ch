@@ -115,26 +115,46 @@ in
   };
 
   config = mkIf (cfg != { }) {
-    assertions = [
-      {
-        # Two names for one device is almost always a copy-paste, and it defeats the entire
-        # purpose: the table exists so there is ONE answer to "which disk is pool0".
-        assertion =
-          let paths = lib.mapAttrsToList (_: d: d.device) cfg;
-          in lib.length (lib.unique paths) == lib.length paths;
-        message =
-          let
-            dup = lib.filter
-              (p: lib.count (q: q == p) (lib.mapAttrsToList (_: d: d.device) cfg) > 1)
-              (lib.unique (lib.mapAttrsToList (_: d: d.device) cfg));
-          in ''
-            nixstorage.disks: the same device path is declared under more than one name:
-            ${lib.concatStringsSep "\n" (map (p: "  ${p}") dup)}
+    assertions =
+      let
+        paths = lib.mapAttrsToList (_: d: d.device) cfg;
 
-            One disk, one name. Two names for one device means two consumers can believe
-            they own it, which is the drift this table exists to remove.
-          '';
-      }
-    ];
+        # `lib.unique`'s own fold compares each element against a GROWING
+        # accumulator (`elem e acc`) -- the first-ever element (and, if
+        # there is only one disk in the whole table, the ONLY element) is
+        # compared against an empty accumulator, which `elem` answers
+        # `false` for without ever forcing the element itself. Left alone,
+        # that means a table with exactly one disk -- or any disk whose
+        # device string never happens to collide with an already-forced
+        # one during the fold -- has its `device` TYPE never actually
+        # checked by anything in this module: a raw `/dev/sdb` declared as
+        # a lone entry would sail through `nix flake check` and
+        # `nixos-rebuild switch` alike with zero errors, exactly the
+        # failure this file's header claims cannot happen ("`/dev/sdX` is
+        # refused by the type, not by convention"). `deepSeq` closes that
+        # gap directly: every declared device is forced here,
+        # unconditionally, whether or not any two of them collide.
+        allDevicesWellTyped = builtins.deepSeq paths true;
+      in
+      [
+        {
+          # Two names for one device is almost always a copy-paste, and it defeats the entire
+          # purpose: the table exists so there is ONE answer to "which disk is pool0".
+          assertion = allDevicesWellTyped && lib.length (lib.unique paths) == lib.length paths;
+          message =
+            let
+              dup = lib.filter
+                (p: lib.count (q: q == p) paths > 1)
+                (lib.unique paths);
+            in
+            ''
+              nixstorage.disks: the same device path is declared under more than one name:
+              ${lib.concatStringsSep "\n" (map (p: "  ${p}") dup)}
+
+              One disk, one name. Two names for one device means two consumers can believe
+              they own it, which is the drift this table exists to remove.
+            '';
+        }
+      ];
   };
 }

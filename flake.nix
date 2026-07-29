@@ -59,24 +59,32 @@
         ];
       };
 
-      # Same four files, same schema, on system-manager's smaller option
-      # surface. None of the four touches a NixOS-only primitive as
-      # designed -- shape/delivery are pure option declarations + eval-time
-      # assertions, and both reconciler and layout.verify are `systemd`
-      # oneshots + optional timers -- the same portability argument
-      # nixshare's own client-side core makes for its watchdog.
+      # Same five files, same schema, on system-manager's smaller option
+      # surface. None of the five touches a NixOS-only primitive as
+      # designed -- shape/delivery/disks are pure option declarations +
+      # eval-time assertions, and both reconciler and layout.verify are
+      # `systemd` oneshots + optional timers -- the same portability
+      # argument nixshare's own client-side core makes for its watchdog.
       # UNCONFIRMED against a real system-manager-applied host (see
       # README's Non-goals); flagged rather than silently assumed, same
       # convention nixshare uses for its own equivalent caveat.
+      #
+      # `disks` was missing from this list entirely from the commit that
+      # introduced modules/disks.nix (it reached nixosModules above, never
+      # here) until this comment was written -- the exact kind of drift a
+      # naming table is supposed to prevent elsewhere, caught here by
+      # nothing more than rereading this file end to end.
       systemManagerModules.shape = ./modules/shape.nix;
       systemManagerModules.delivery = ./modules/delivery.nix;
       systemManagerModules.reconciler = ./modules/reconciler.nix;
+      systemManagerModules.disks = ./modules/disks.nix;
       systemManagerModules.layout = ./modules/layout.nix;
       systemManagerModules.default = {
         imports = [
           self.systemManagerModules.shape
           self.systemManagerModules.delivery
           self.systemManagerModules.reconciler
+          self.systemManagerModules.disks
           self.systemManagerModules.layout
         ];
       };
@@ -122,6 +130,7 @@
           shapeModule = self.nixosModules.shape;
           deliveryModule = self.nixosModules.delivery;
           reconcilerModule = self.nixosModules.reconciler;
+          disksModule = self.nixosModules.disks;
           layoutModule = self.nixosModules.layout;
         });
 

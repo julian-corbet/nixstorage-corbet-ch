@@ -56,6 +56,24 @@
 #   comment for why: never trust a rendered config file to still say what
 #   the Nix eval that produced it said).
 #
+#   `verify.targets.<name>.device` MAY ALSO be left unset and resolved
+#   instead via `fromDisk`, a name into `nixstorage.disks` (modules/
+#   disks.nix, this same repo). That table exists precisely because three
+#   repos once each retyped the same by-id string for the same physical
+#   disk with nothing asserting they agreed -- see disks.nix's own header
+#   for the incident. Before `fromDisk`, this file's `device` was a FOURTH
+#   independent transcription of that same fact, inside the one repo whose
+#   declared images are what eventually get written to real media -- so a
+#   verify target checking the wrong disk because its own copy of the
+#   by-id string had quietly drifted from `nixstorage.disks`' copy was
+#   exactly as possible here as the cross-repo version disks.nix was built
+#   to close. Read as `config.nixstorage.disks or { }`, never imported:
+#   `nixosModules.layout` is exported STANDALONE (see flake.nix) precisely
+#   so a consumer can use verify without ever hearing about `disks.nix`,
+#   and that must keep working -- `fromDisk` left `null` (its default)
+#   simply has nothing to resolve against, and `device` falls back to
+#   being the same required, hand-typed field it always was.
+#
 # ROLES ARE A FIXED, REVIEWABLE CATALOGUE, NOT A FREE-FORM GUID FIELD --
 # see lib/partition-roles.nix. A role answers "what is this slot for"
 # (`esp`, `raw`, `luks`), never "what GPT type-GUID do I type" -- the same
@@ -193,10 +211,22 @@ let
   # ── assertions: verify targets ──────────────────────────────────────────
   verifyTargetNames = attrNames cfg.verify.targets;
 
+  # `config.nixstorage.disks`, not imported: `nixstorage.disks` (modules/
+  # disks.nix) lives in THIS repo, so unlike the nixid cross-repo contract
+  # reconciler.nix reads (see that file's own header), there is no reason
+  # to go through a separate module boundary to reach it. Still read as
+  # `or { }`, not assumed present, because `nixosModules.layout` is
+  # exported STANDALONE and `systemManagerModules.layout` in this repo's
+  # own flake.nix is a real, live example of exactly that: layout imported
+  # without disks. On such a host `nsDisks` is `{ }`, no `fromDisk` below
+  # ever resolves, and every `device` reverts to being required and
+  # hand-typed, unchanged from before this option existed.
+  nsDisks = config.nixstorage.disks or { };
+
   deviceIdentityAssertions = concatMap
     (name:
       let t = cfg.verify.targets.${name}; in
-      optional (!(hasPrefix "/dev/disk/by-" t.device)) {
+      optional (t.device != null && !(hasPrefix "/dev/disk/by-" t.device)) {
         assertion = false;
         message = ''
           nixstorage.layout.verify.targets."${name}".device = "${t.device}"
@@ -205,6 +235,42 @@ let
           never a raw /dev/sdX or /dev/nvmeXnY, which can silently point at
           a different physical disk after a reboot or a drive swap. See
           this module's own header for the full safety model.
+        '';
+      })
+    verifyTargetNames;
+
+  # `device == null` only ever happens here when BOTH the hand-typed field
+  # and `fromDisk`'s resolution came up empty -- see `verifyTargetModule`'s
+  # own `device` option below for exactly which of those two this is.
+  # Caught here, deliberately, rather than left as a bare "used but not
+  # defined" trace on `device` itself -- the same choice `imageModule`'s
+  # own `sizeMiB` makes above, for the same reason: which live device a
+  # verify target means is exactly as host-specific a fact, and a plain
+  # module-system trace can't say WHY it's missing (typo'd `fromDisk`?
+  # `nixstorage.disks` never imported? never set at all?) the way this
+  # message can.
+  deviceUnresolvedAssertions = concatMap
+    (name:
+      let t = cfg.verify.targets.${name}; in
+      optional (t.device == null) {
+        assertion = false;
+        message = ''
+          nixstorage.layout.verify.targets."${name}" has no device: neither
+          `device` nor a resolving `fromDisk` is set.${
+            optionalString (t.fromDisk != null) ''
+
+              fromDisk = "${t.fromDisk}" was set but does not name an entry
+              in nixstorage.disks. Declared disks: ${
+                if nsDisks == { } then "(none -- is modules/disks.nix imported on this host at all?)"
+                else concatStringsSep ", " (attrNames nsDisks)
+              }.''
+          }
+          Either set device directly to a /dev/disk/by-* path, or set
+          fromDisk to the name of an already-declared nixstorage.disks.<name>
+          entry. Which live device nixstorage-layout-verify checks is exactly
+          as host-specific a fact as nixstorage.layout.images."<name>".sizeMiB
+          above -- guessing it here is how a verify run quietly checks the
+          wrong disk, or none at all.
         '';
       })
     verifyTargetNames;
@@ -222,10 +288,20 @@ let
       })
     verifyTargetNames;
 
-  # Only images actually reachable from this assertion set are safe to
-  # resolve partitions for below -- imageReferenceAssertions above is what
-  # keeps a dangling verify.targets.<name>.image from ever reaching here.
-  safeVerifyTargetNames = filter (name: elem cfg.verify.targets.${name}.image imageNames) verifyTargetNames;
+  # Only targets actually reachable from BOTH assertion sets above are safe
+  # to render below -- imageReferenceAssertions is what keeps a dangling
+  # verify.targets.<name>.image from ever reaching here, and
+  # deviceUnresolvedAssertions is the same guarantee for a `device` that
+  # came up null (unset, with a `fromDisk` that didn't resolve either).
+  # Without this second half, an unresolved target would still fail the
+  # eval via the assertion above, but `renderedVerifyModel` below would
+  # ALSO have already embedded a literal JSON `null` as that target's
+  # device in the process of getting there -- harmless today only because
+  # the assertion fires first, but not a rendering this file should ever
+  # produce even transiently.
+  safeVerifyTargetNames = filter
+    (name: elem cfg.verify.targets.${name}.image imageNames && cfg.verify.targets.${name}.device != null)
+    verifyTargetNames;
 
   renderedVerifyModel = {
     targets = listToAttrs (map
@@ -404,10 +480,40 @@ let
     };
   };
 
-  verifyTargetModule = { ... }: {
+  verifyTargetModule = { config, ... }: {
     options = {
+      fromDisk = mkOption {
+        type = types.nullOr types.str;
+        default = null;
+        example = "pool0";
+        description = ''
+          Which `nixstorage.disks.<name>` entry (modules/disks.nix, this
+          same repo) names this target's physical device, so `device`
+          below can default from it instead of being retyped a fourth
+          time -- see this file's own header for why a verify target is
+          exactly the transcription disks.nix exists to remove.
+
+          Left `null` (the default), `device` must be set directly --
+          legitimate whenever this host has no `nixstorage.disks` table at
+          all (e.g. `nixosModules.layout` imported standalone), or this
+          target's medium genuinely isn't one of the physical disks named
+          there (a loopback image under test, say).
+        '';
+      };
+
       device = mkOption {
-        type = types.str;
+        type = types.nullOr types.str;
+        default =
+          if config.fromDisk != null && nsDisks ? "${config.fromDisk}"
+          then nsDisks."${config.fromDisk}".device
+          else null;
+        defaultText = lib.literalExpression ''
+          the `device` of `nixstorage.disks.<fromDisk>`, when `fromDisk` is
+          set and names a declared entry; otherwise `null` -- a `null`
+          reaching activation is a hard eval failure (see
+          deviceUnresolvedAssertions above), never a silently-accepted
+          missing device
+        '';
         example = "/dev/disk/by-id/example-target-uuid";
         description = ''
           The live device this target's declared image is expected to
@@ -419,6 +525,11 @@ let
           modules/layout-verify.sh itself). `nixstorage-layout-verify`
           only ever READS this device -- see this file's own header for the
           full safety model.
+
+          Set this directly to override `fromDisk`'s resolution, or to
+          declare a target with no corresponding `nixstorage.disks` entry
+          at all -- an explicit value here always wins over `fromDisk`,
+          never the reverse.
         '';
       };
 
@@ -511,6 +622,7 @@ in
       # whether or not the tool that would eventually read it is installed.
       assertions =
         imageAssertions
+        ++ deviceUnresolvedAssertions
         ++ deviceIdentityAssertions
         ++ imageReferenceAssertions;
     }
