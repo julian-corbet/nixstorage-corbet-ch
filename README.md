@@ -361,7 +361,7 @@ nixstorage.layout.images.example-host-disk = {
 
 # nixstorage-layout-verify never writes anything -- see "The safety
 # model" above. `device` is a placeholder /dev/disk/by-id path precisely
-# because a real one here would be exactly the kind of fleet detail a
+# because a real one here would be exactly the kind of host-specific detail a
 # public repo must never carry.
 nixstorage.layout.verify.enable = true;
 nixstorage.layout.verify.onCalendar = "daily";
