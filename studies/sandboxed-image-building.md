@@ -2,9 +2,9 @@
 
 ## The problem
 
-`nixstorage.layout.images.<name>.result` has to be a pure Nix derivation --
-built inside a Nix build sandbox, with no root privilege and no access to
-the host's own block-device tree. The obvious way to build a partitioned,
+`nixstorage.layout.images.<name>.result` has to be a pure Nix derivation -- built
+inside a Nix build sandbox, with no root privilege and no access to the
+host's own block-device tree. The obvious way to build a partitioned,
 formatted disk image (`losetup` a backing file, partition the loop device,
 mount and populate each partition, `losetup -d`) needs exactly the two
 things a build sandbox does not have: a loop device, and `mount`.
@@ -75,8 +75,8 @@ first.
 
 ## Read-back for verification is the same story, one layer up
 
-`nixstorage.layout.verify` needs to read a *live* device's partition table
-without writing to it. `sfdisk --json <device>` is the read-only listing
+`nixstorage.layout.verify` needs to read a *live* device's partition table without
+writing to it. `sfdisk --json <device>` is the read-only listing
 counterpart to the two write commands above, and it works identically
 against a plain file (used directly by every check in this repo's own
 `checks/`) or a real block device (the only case `nixstorage-layout-verify`
@@ -91,11 +91,22 @@ two-partition image via `lib/image.nix` and asserts on it directly: total
 byte size, partition count, names, type-GUIDs, that the built ESP passes
 `fsck.vfat -n`, and that the `raw` partition's entire data region is still
 all-zero (proving the builder never writes into a slot it has no business
-formatting). `layout-verify-detects-drift` runs the real
-`nixstorage-layout-verify` script against that same image twice -- once
-with a config that matches it, once with one deliberately wrong partition
-size -- and asserts the first exits clean with no `FAIL` line and the
-second exits non-zero with one. See that check's own comments for how it
-resolves a `/dev/disk/by-id/*` device string to the real fixture file
-without ever creating a real device node (a fake `readlink`, the same
-technique nixboot's own checks use for its fake `efibootmgr`).
+formatting). `layout-verify-detects-drift` runs the real `nixstorage-layout-verify`
+script against that same image twice -- once with a config that matches
+it, once with one deliberately wrong partition size -- and asserts the
+first exits clean with no `FAIL` line and the second exits non-zero with
+one. See that check's own comments for how it resolves a `/dev/disk/by-id/*`
+device string to the real fixture file without ever creating a real device
+node (a fake `readlink`, the same technique nixboot's own checks use for
+its fake `efibootmgr`).
+
+## History
+
+This module, and this study, were extracted out of `nixstorage`
+unmodified -- the measurement is about `sgdisk`/`sfdisk`/`mkfs.vfat`
+themselves and does not change with which repo the code carrying it lives
+in. That extraction has since been reversed (see the main
+[README](../README.md)'s "Why layout is not a separate repo" for why), and
+this study is back here with `modules/layout.nix` itself, for the same
+reason it never minded which repo it lived in the first time: nothing
+about the measurement changed either way.

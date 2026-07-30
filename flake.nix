@@ -1,5 +1,5 @@
 {
-  description = "Declarative ZFS dataset shape (recordsize/compression convergence) and category-based delivery (source -> $HOME -> XDG -> scope), reconciled by one idempotent pass. Ownership -- uid/gid and its Kubernetes securityContext twin -- is deliberately NOT here; a dataset names its owner by a string key into nixid instead.";
+  description = "Declarative storage, as ONE layer between hosts and the consumers of data: the physical disk table every other module reads by name, pre-pool media layout (a GPT partition table -- sizes, sector size, roles -- built as a pure derivation emitting a plain FILE, plus a read-only drift check against live media), ZFS dataset shape (recordsize/compression convergence), and category-based delivery (source -> $HOME -> XDG -> scope), reconciled by one idempotent pass. Ownership -- uid/gid and its Kubernetes securityContext twin -- is deliberately NOT here; a dataset names its owner by a string key into nixid instead.";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
@@ -29,12 +29,12 @@
     in
     {
       # ---------------------------------------------------------------
-      # Four independently toggleable modules under one `nixstorage.*`
+      # FIVE independently toggleable modules under one `nixstorage.*`
       # namespace -- same shape as nixbackup's three (destinations/
-      # autobootstrap/monitor). `shape` and `delivery` are pure schema +
-      # assertion, no systemd unit, nothing to "enable" -- import either
-      # on its own to get validated, machine-readable declarations with
-      # zero runtime footprint. `reconciler` and `layout` are the two
+      # autobootstrap/monitor). `shape`, `delivery` and `disks` are pure
+      # schema + assertion, no systemd unit, nothing to "enable" -- import
+      # any one on its own to get validated, machine-readable declarations
+      # with zero runtime footprint. `reconciler` and `layout` are the two
       # modules that actually act -- `reconciler` on ownership and
       # top-directory mode only (see README's Status for the one open gap:
       # nothing yet runs the `zfs set` half `shape.nix`'s own model
@@ -42,7 +42,22 @@
       # (see modules/layout.nix's own header for the full safety model --
       # it never writes to a block device, only ever to a plain file it
       # builds itself) -- hence `default` for the common case of wanting
-      # all four.
+      # all five.
+      #
+      # `layout` spent a while extracted out of here into a standalone
+      # `nixlayout` repo, on the grounds that shape/delivery/reconciler all
+      # presuppose an EXISTING dataset while `layout` runs BEFORE any pool
+      # exists. THAT SPLIT IS REVERSED, and the merge is the current
+      # design: "pre-pool vs post-pool" is a ZFS-SHAPED boundary, and under
+      # LVM -- or hardware RAID presenting one opaque LUN, or plain
+      # partitions, or any of the storage architectures a public module
+      # family cannot enumerate in advance -- there is no equivalent line
+      # in the same place. What survives every implementation is the LAYER,
+      # which is what this repo is. See modules/layout.nix's own header for
+      # the full argument, and for what the split cost while it lasted:
+      # consumers reading `config.nixstorage.layout.images or { }` resolved
+      # to `{ }` forever, silently, because a defensive read across an
+      # option-path rename cannot fail loudly.
       # ---------------------------------------------------------------
       nixosModules.shape = ./modules/shape.nix;
       nixosModules.delivery = ./modules/delivery.nix;
@@ -106,7 +121,7 @@
       #   }
       lib.buildLayoutImage = { pkgs }: import ./lib/image.nix { inherit pkgs; };
 
-      # All four of this repo's modules, PLUS nixid's posix identity
+      # All five of this repo's modules, PLUS nixid's posix identity
       # module -- the one thing nixstorage can name an owner/identity
       # reference to but must never define itself -- composed into one
       # system from examples/host, PLUS a handful of standalone eval-tests

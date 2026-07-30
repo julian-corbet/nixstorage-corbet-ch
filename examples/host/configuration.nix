@@ -1,5 +1,5 @@
-# The smallest NixOS configuration that composes nixstorage's own three
-# modules together with nixid's posix identity module, used by the
+# The smallest NixOS configuration that composes nixstorage's own four
+# implemented modules together with nixid's posix identity module, used by the
 # `modules-evaluate` check.
 #
 # This is not a machine anyone would run: the pool is called "tank", the

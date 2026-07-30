@@ -3,6 +3,9 @@
 **A dataset is declared once — its shape, its owner, and where it
 surfaces — and one idempotent reconciler converges all three, forever.**
 
+**A piece of media is carved once — a partition table, sizes, roles — and
+rendered as a pure Nix derivation that never touches a block device.**
+
 `nixstorage` is the declarative model of a ZFS storage substrate: what
 shape a dataset's blocks should take (`recordsize`/`compression`,
 converged forever, never a one-time `zfs create` flag left to drift), and
@@ -52,66 +55,62 @@ was the fix for a coupling that had already started to bite.
   `shape.nix`'s own declared model, and (see [Status](#status)) does not
   yet have a reconciler of its own actually applying it; this module's
   job stops at ownership and mode.
-- **`modules/layout.nix`** (`nixstorage.layout`) — the second acting
-  module, and the provisioning half `shape.nix`'s own header explicitly
-  refuses to be: how a piece of media is **carved** — a partition table,
-  sizes, roles (an ESP, a raw slot, an encrypted region). `images.<name>`
-  renders a declaration and emits an image: a pure derivation producing a
-  plain FILE, never a device. `verify` is the one thing this module lets
-  run against real, live media, and it only ever *reads* — `sfdisk --json`,
-  never a write — reporting PASS/FAIL/SKIP drift against the declared
-  model. See [The safety model](#the-safety-model-nixstorage-never-touches-a-block-device)
-  below; this is the module the whole repo's "no service here" claim had
-  to be made honest about, not just repeated.
+- **`modules/layout.nix`** (`nixstorage.layout`) — pre-pool media geometry:
+  a GPT partition table (an ESP, a raw slot, an encrypted region), the
+  sector size it was built for, and a read-only check that a live device
+  still matches what was declared.
+  `nixstorage.layout.images.<name>.result` is a pure Nix derivation
+  (`lib/image.nix`) — `sgdisk`/`sfdisk` and `mkfs.vfat -C` all operate on
+  a plain FILE, never a block device — and `nixstorage.layout.verify` is
+  the one acting surface this module ships, and it only ever READS a live
+  device (`sfdisk --json`) and reports drift; it never writes to one. See
+  [The safety model](#the-safety-model-nixstorage-never-touches-a-block-device)
+  below for the full invariant. Carving a slot has no opinion on what
+  shape's `recordsize`/`compression` the pool eventually built on top of
+  it gets, or who ends up owning it — that's `shape.nix`'s and
+  `reconciler.nix`'s job, elsewhere in this same repo, once a pool exists
+  on top of whatever this module carved.
 
 Each is independently toggleable: import `shape` alone to get a validated,
 machine-readable dataset model with zero runtime footprint (useful as
 documentation, or as an input to a completely different reconciler you
 already run); import `delivery` alone for the same on the `$HOME`/XDG
-side; import all four (`nixosModules.default`) for the common case of
-wanting the whole thing to actually converge. Nothing here is a lumped
-`nixstorage.enable` — see `modules/shape.nix` and `modules/delivery.nix`
-for why neither even has an `enable` option: there is nothing running to
-turn on, only a schema to validate, so the act of importing the file *is*
-the toggle. `reconciler` and `layout` each carry their own `enable`
-instead, because each of them genuinely does have something to turn on.
+side; import `layout` alone for the pre-pool media side — a validated
+partition-table model, plus an optional `verify.enable`-gated drift check,
+with zero footprint until that's turned on; import all four
+(`nixosModules.default`) for the common case of wanting the whole thing to
+actually converge. Nothing here is a lumped `nixstorage.enable` — see
+`modules/shape.nix` and `modules/delivery.nix` for why neither even has an
+`enable` option: there is nothing running to turn on, only a schema to
+validate, so the act of importing the file *is* the toggle. `reconciler`
+carries its own `enable` instead, because it genuinely does have
+something to turn on — `layout.verify` does too, for the identical
+reason.
 
-## The safety model: nixstorage never touches a block device
+## Why layout is not a separate repo
 
-Stated once, here, because it is the invariant every option and every
-script in `modules/layout.nix` exists to uphold, and the reason this repo
-can carry a module that creates media at all without contradicting
-`shape.nix`'s own "never destroy or (re)create" stance:
-
-- **Building an image touches only a plain file.** `nixstorage.layout.images.<name>.result`
-  is a pure Nix derivation (`lib/image.nix`): `sgdisk`/`sfdisk` write a GPT
-  table directly into an ordinary file (GPT tools do their own file I/O at
-  whatever byte offset the table says — they never require the target to
-  *be* a device node), and `mkfs.vfat -C` *creates* a correctly-sized file
-  from nothing for the one role (`esp`) that gets real filesystem content.
-  No loop device, no `mount`, no root privilege, anywhere in this path. A
-  bug here produces a bad file. It cannot produce a lost pool, because
-  there is no pool, and no device, anywhere in its reach.
-- **Writing that image to real media is a human act, outside this repo.**
-  There is no `nixstorage-layout-write` tool. `dd`, or whatever a human's
-  own tooling looks like, happens after this module is done — the same
-  boundary nixvault's own `SCOPE` note draws around `nixvault.device`
-  ("provisioning that device is a disk-layout tool's job") and nixboot's
-  own ESP section draws around itself ("declared, never created —
-  nixboot does not partition"). `nixstorage.layout` is that disk-layout
-  tool, on both sides of that boundary.
-- **The one thing that reads a live device only ever reads it.**
-  `nixstorage-layout-verify` (`nixstorage.layout.verify`) runs `sfdisk
-  --json` — a listing command — against a device, and reports drift
-  against the declaration. It never writes. Device identity is always a
-  stable `/dev/disk/by-*` symlink, never a raw `/dev/sdX`/`/dev/nvmeXnY`,
-  checked twice: once by an eval-time assertion, once again, defensively,
-  by the runtime script itself.
-- **Never a side effect of activation.** Neither building an image nor
-  running the verify pass is wired to `nixos-rebuild switch`, boot, or any
-  other activation path — see `nixstorage.layout.verify.enable`/
-  `.onCalendar` for exactly how (and how not) the verify tool is reachable,
-  mirroring `nixstorage.reconciler`'s own `enable`/`onCalendar` shape.
+`layout` spent a while extracted into a standalone `nixlayout` repo, on
+the argument that `shape`/`delivery`/`reconciler` all presuppose an
+EXISTING dataset while `layout` ran *before* any pool existed — an audit's
+accurate reading of the code, and still the wrong repo boundary. **That
+split has been reversed.** "Pre-pool vs post-pool" is a boundary ZFS
+happens to have, not one storage itself has: under LVM there is no pool
+for a partition table to precede at all (a PV is carved, grouped into a
+VG, and carved again into LVs — "before the pool exists" names no single
+point in that lifecycle), and the same holds for hardware RAID presenting
+one opaque LUN, plain partitions, btrfs's own multi-device volumes,
+bcachefs, or an iSCSI target somebody else already carved before this
+host ever saw it. A public module family cannot enumerate every storage
+architecture a consumer might run underneath it, so this repo covers the
+LAYER instead of any one architecture's phases: storage sits between a
+host and the consumers of its data, and which physical device this is
+(`disks.nix`), how it's carved (`layout.nix`), what shape the dataset
+that lands on it takes (`shape.nix`), who owns it (`reconciler.nix`), and
+where it surfaces (`delivery.nix`) are all facts about that one layer,
+however it happens to be built underneath. See `modules/layout.nix`'s own
+header for the full argument, and [Status](#status) below for what the
+split cost while it lasted — real consumers silently reading
+`nixstorage.layout.*` as always-empty for the entire life of the split.
 
 ## Why nixstorage depends on nixid, and never the reverse
 
@@ -175,11 +174,59 @@ correctly.
   USB-image builds — [nixnas](https://github.com/julian-corbet/nixnas)'s
   job. `nixstorage` is a set of NixOS/system-manager modules any host can
   import; it has no opinion on how that host got to a running kernel.
-- **It never touches a block device.** `nixstorage.layout.images.<name>`
-  builds a plain file. Writing that file to real media is a human act
-  this repo deliberately does not perform — see
-  [The safety model](#the-safety-model-nixstorage-never-touches-a-block-device).
-  `nixstorage.layout.verify` reads a live device back, and only ever reads.
+- **It does not mount, format, or open anything beyond the plain file
+  `nixstorage.layout.images.<name>` builds.** What happens to that file
+  afterward — being `dd`'d to a disk, that disk being imported as a ZFS
+  pool, a LUKS volume being opened on top of a `luks`-role slot — is every
+  other tool's job, `shape`/`delivery`/`reconciler` included, once a pool
+  exists on top of whatever `layout` carved.
+- **It does not generate key material.** The `luks`-role partition is
+  sized and typed so `cryptsetup` recognizes it, and left otherwise
+  completely untouched — `cryptsetup luksFormat` needs a key, and the
+  only place a key may ever be generated is on the real,
+  already-written-to-media host, by a human, at the console
+  ([nixvault](https://github.com/julian-corbet/nixvault-corbet-ch)'s own
+  `nixvault-create` lifecycle). Baking one into a world-readable Nix store
+  path is not a shortcut this repo will ever take.
+- **It never touches a block device, in either direction.** See
+  [The safety model](#the-safety-model-nixstorage-never-touches-a-block-device)
+  below.
+
+## The safety model: nixstorage never touches a block device
+
+Stated once, here, because it is the invariant every option and every
+script in `nixstorage.layout` exists to uphold:
+
+- **Building an image touches only a plain file.**
+  `nixstorage.layout.images.<name>.result` is a pure Nix derivation
+  (`lib/image.nix`): `sgdisk`/`sfdisk` write a GPT table directly into an
+  ordinary file (GPT tools do their own file I/O at whatever byte offset
+  the table says — they never require the target to *be* a device node),
+  and `mkfs.vfat -C` *creates* a correctly-sized file from nothing for the
+  one role (`esp`) that gets real filesystem content. No loop device, no
+  `mount`, no root privilege, anywhere in this path. A bug here produces a
+  bad file. It cannot produce a lost pool, because there is no pool, and
+  no device, anywhere in its reach.
+- **Writing that image to real media is a human act, outside this repo.**
+  There is no `nixstorage-layout-write` tool. `dd`, or whatever a human's
+  own tooling looks like, happens after this module is done — the same
+  boundary nixvault's own `SCOPE` note draws around `nixvault.device`
+  ("provisioning that device is a disk-layout tool's job") and nixboot's
+  own ESP section draws around itself ("declared, never created —
+  nixboot does not partition"). `nixstorage.layout` is that disk-layout
+  tool, on both sides of that boundary.
+- **The one thing that reads a live device only ever reads it.**
+  `nixstorage-layout-verify` (`nixstorage.layout.verify`) runs
+  `sfdisk --json` — a listing command — against a device, and reports
+  drift against the declaration. It never writes. Device identity is
+  always a stable `/dev/disk/by-*` symlink, never a raw
+  `/dev/sdX`/`/dev/nvmeXnY`, checked twice: once by an eval-time
+  assertion, once again, defensively, by the runtime script itself.
+- **Never a side effect of activation.** Neither building an image nor
+  running the verify pass is wired to `nixos-rebuild switch`, boot, or any
+  other activation path — see `nixstorage.layout.verify.enable`/
+  `.onCalendar` for exactly how (and how not) the verify tool is
+  reachable.
 
 ## The traversability finding
 
@@ -286,23 +333,48 @@ nixstorage.reconciler.leaves."/tank/apps/data" = {
 };
 
 nixid.posix.identities.example-app = { uid = 3002; variant = "native"; };
+```
 
-# LAYOUT: how the media this pool lives on was carved -- an ESP, a raw
-# slot, and a trailing encrypted region consuming whatever is left.
+```nix
+# configuration.nix (continued) -- layout is pre-pool media, independent
+# of the dataset declared above; a host can use nixstorage.layout without
+# ever declaring a ZFS dataset, and vice versa.
+#
+# A single small image with all three sanctioned roles: an ESP (the only
+# role that gets real filesystem content -- vfat, empty), a raw slot
+# (reserved, untouched -- would eventually hold, say, a ZFS pool member
+# nixstorage.shape has no opinion on because it isn't a mountable dataset
+# yet), and a trailing encrypted region consuming whatever is left
+# (reserved, never cryptsetup luksFormat-ed by this repo -- see
+# "Non-goals" above).
 nixstorage.layout.images.example-host-disk = {
   sizeMiB = 512;
   partitions = [
     { name = "ESP"; role = "esp"; sizeMiB = 256; espLabel = "EXAMPLEESP"; }
     { name = "pool-member"; role = "raw"; sizeMiB = 128; }
-    { name = "vault"; role = "luks"; } # last entry: consumes the remainder
+    # The LAST partition in the list, and the only one allowed to leave
+    # sizeMiB unset -- consumes whatever remains of the 512 MiB image
+    # after the ESP and the raw slot above, minus GPT's own overhead.
+    { name = "vault"; role = "luks"; }
   ];
 };
 
+# nixstorage-layout-verify never writes anything -- see "The safety
+# model" above. `device` is a placeholder /dev/disk/by-id path precisely
+# because a real one here would be exactly the kind of fleet detail a
+# public repo must never carry.
 nixstorage.layout.verify.enable = true;
+nixstorage.layout.verify.onCalendar = "daily";
 nixstorage.layout.verify.targets.example-host-disk = {
   device = "/dev/disk/by-id/example-host-disk-uuid";
   image = "example-host-disk";
 };
+
+# Alternative to a hand-typed `device` above, when this host also has a
+# `nixstorage.disks` table and has already named this physical disk
+# there:
+#
+#   nixstorage.layout.verify.targets.example-host-disk.fromDisk = "pool0";
 ```
 
 ## Options reference
@@ -395,37 +467,48 @@ ownership + top-directory mode only, via `modules/reconcile.sh`):
   reconciled *and* in the effective prune set is an assertion failure —
   `prune` means genuinely hands-off, not "reconciled independently".
 
-`nixstorage.layout.*` (`modules/layout.nix` — real: `images` is a pure
-derivation builder, `verify` is a real, read-only pass via
-`modules/layout-verify.sh`; see
-[The safety model](#the-safety-model-nixstorage-never-touches-a-block-device)):
+`nixstorage.layout.*` (`modules/layout.nix` — real; never touches a block
+device, see [The safety model](#the-safety-model-nixstorage-never-touches-a-block-device)
+above):
 
 - `images.<name>.sizeMiB` — the image's total size, in MiB. No default
-  (asserted) — as host/device-specific as nixboot's `loader.efiVariables`
-  or nixvault's `device`.
+  (asserted) — as host/device-specific a fact as nixboot's
+  `loader.efiVariables` or nixvault's `device`.
+- `images.<name>.sectorSize` — `512` or `4096`, default `4096`. NOT
+  cosmetic: a GPT stores every partition boundary as a sector number, so
+  the same table describes a byte layout eight times larger at 4096 than
+  at 512. Check the real target
+  (`cat /sys/block/<dev>/queue/logical_block_size`) before declaring.
 - `images.<name>.partitions` — the partition table, in on-disk order.
   Each entry: `name` (its GPT partition name, unique within the image;
   asserted), `role` (one of `lib/partition-roles.nix`'s catalogue —
   `"esp"`, `"raw"`, `"luks"`; resolves the GPT type-GUID, never restated
   by hand), `sizeMiB` (MiB, or `null` to consume the remainder of the
-  image — legal ONLY for the last entry in the list; asserted), `espLabel`
-  (the FAT volume label; only meaningful — and only accepted — when
-  `role = "esp"`; asserted).
+  image — legal ONLY for the last entry in the list; asserted),
+  `espLabel` (the FAT volume label; only meaningful — and only accepted —
+  when `role = "esp"`; asserted).
 - `images.<name>.result` — read-only. The built image: a single plain
   FILE, lazily built (declaring an image costs nothing at eval time
-  beyond the assertions above; nothing forces `result` merely by existing
-  — see the option's own description).
+  beyond the assertions above; nothing forces `result` merely by
+  existing).
 - `verify.enable` — install `nixstorage-layout-verify` and render its
   config; with no `onCalendar` set, it only ever runs on manual
   invocation. Never wired to activation/boot.
 - `verify.onCalendar` (default `null`) — a systemd `OnCalendar=` for a
-  recurring timer. No guessed default cadence, same reasoning as
-  `nixstorage.reconciler.onCalendar` — even a read-only pass against real
-  block devices is an operational decision, not a value this module picks.
+  recurring timer. No guessed default cadence — even a read-only pass
+  against real block devices is an operational decision, not a value
+  this module picks.
 - `verify.targets.<name>.device` — the live device this target's image is
   expected to already be written to. Always a stable `/dev/disk/by-*`
   symlink (asserted, and checked again at runtime) — never a raw
   `/dev/sdX`/`/dev/nvmeXnY`.
+- `verify.targets.<name>.fromDisk` — name of a `nixstorage.disks.<name>`
+  entry (`modules/disks.nix`, this same repo) to resolve `device` from
+  instead of retyping it. Read as `config.nixstorage.disks or { }`, never
+  assumed present — `nixosModules.layout` is exported STANDALONE (see
+  `flake.nix`), so a host may import `layout` without `disks`, and on such
+  a host `device` reverts to being the same required, hand-typed field it
+  always was. An explicit `device` always wins over this.
 - `verify.targets.<name>.image` — which `images.<name>` this device is
   expected to match (asserted to reference a declared image).
 
@@ -462,45 +545,56 @@ scaffold's invention):
 
 | Path | What |
 |---|---|
-| `flake.nix` | `nixosModules.{shape,delivery,reconciler,layout}` + `.default`; same quartet under `systemManagerModules.*`; `lib.partitionRoles`/`lib.buildLayoutImage` |
+| `flake.nix` | `nixosModules.{shape,delivery,reconciler,disks,layout}` + `.default`; same quintet under `systemManagerModules.*`; `lib.partitionRoles`/`lib.buildLayoutImage` |
 | `modules/shape.nix` | dataset classes + datasets: `recordsize`/`compression` convergence, `subtreeMountable`, `prune` |
 | `modules/delivery.nix` | categories: `source`/`home`/`xdg`/`scope`/`mount` |
 | `modules/reconciler.nix` | Nix side: `nixstorage.reconciler` options, renders the JSON `reconcile.sh` reads |
 | `modules/reconcile.sh` | runtime side: the actual idempotent `chown -h`/`chmod` pass, roots-then-leaves, mis-owned-only |
-| `modules/layout.nix` | Nix side: `nixstorage.layout` options (images + verify), renders the JSON `layout-verify.sh` reads |
+| `modules/disks.nix` | the disk table: names a host's physical devices once, read by name (here and by `nixluks`/`nixvault`, defensively) |
+| `modules/layout.nix` | pre-pool media geometry: `nixstorage.layout` options (`images` + `verify`), renders the JSON `layout-verify.sh` reads |
 | `modules/layout-verify.sh` | runtime side: the read-only `sfdisk --json` drift check, PASS/FAIL/SKIP per partition |
-| `lib/partition-roles.nix` | the fixed role catalogue (`esp`/`raw`/`luks`) — GPT type-GUID + what, if anything, gets formatted |
 | `lib/image.nix` | the image builder: a resolved partition list -> one raw disk image, a pure derivation |
+| `lib/partition-roles.nix` | the fixed role catalogue (`esp`/`raw`/`luks`) — GPT type-GUID + what, if anything, gets formatted |
 | `examples/host/` | a minimal composed system exercising every implemented option, used by `nix flake check` |
-| `checks/` | eval-time behavioral tests, plus two real build-level proofs (the image builder actually builds; the verify script actually detects drift) |
+| `checks/` | eval-time behavioral tests against the composed system |
 | `experiments/` | open questions and unmeasured defaults |
-| `studies/` | write-ups, including the traversability measurement and the sandboxed-image-building technique |
+| `studies/` | write-ups, including the traversability and sandboxed-image-building measurements |
 | `LICENSE` | MIT |
 
 ## Status
 
-**Pre-alpha, split still landing.** `modules/shape.nix`, `modules/delivery.nix`,
-`modules/reconciler.nix` (+ `modules/reconcile.sh`), and `modules/layout.nix`
-(+ `modules/layout-verify.sh`, `lib/image.nix`, `lib/partition-roles.nix`)
-are all real, checked-in — pure schema and eval-time assertion for the
-first two, an actual idempotent `chown -h`/`chmod` pass for the third,
-a real image-building derivation plus a real, read-only drift check for
-the fourth: roots swept before leaves, leaves sorted shallowest-path-first
-so nesting resolves correctly, mis-owned-only comparisons so a converged
-tree costs one `find` walk and zero syscalls in steady state, `-h` always
-(never following a symlink — see `reconcile.sh`'s own header for the real
-incident this specific flag traces back to), a `reconcile = false`
-carve-out reported never acted on, and — on the layout side —
-`sgdisk`/`sfdisk`/`mkfs.vfat -C` operating only ever on a plain file, never
-a device, with a build-level proof in `checks/` that the built image is
-byte-correct (size, partition table, a valid FAT filesystem in the one
-role that gets one, every other role left provably all-zero) and that
-`nixstorage-layout-verify` genuinely tells a clean match from a drifted
-one. `shape`, `delivery`, and `reconciler` were extracted and generalized
-from a working deployment's own dataset-class, category, and ownership
-maps, every site-specific value replaced with a generic one; `layout` is
-new, built directly against the safety model the operator specifically
-endorsed for it (see [The safety model](#the-safety-model-nixstorage-never-touches-a-block-device)).
+**Pre-alpha, layout merged back in.** `modules/shape.nix`,
+`modules/delivery.nix`, `modules/reconciler.nix` (+ `modules/reconcile.sh`),
+`modules/disks.nix`, and `modules/layout.nix` (+ `modules/layout-verify.sh`,
+`lib/image.nix`, `lib/partition-roles.nix`) are all real, checked-in — pure
+schema and eval-time assertion for shape/delivery/disks/layout's images,
+an actual idempotent `chown -h`/`chmod` pass for the reconciler: roots
+swept before leaves, leaves sorted shallowest-path-first so nesting
+resolves correctly, mis-owned-only comparisons so a converged tree costs
+one `find` walk and zero syscalls in steady state, `-h` always (never
+following a symlink — see `reconcile.sh`'s own header for the real
+incident this specific flag traces back to), and a `reconcile = false`
+carve-out reported never acted on; and a real, read-only drift check for
+layout — `sfdisk --json` against a live device, never writing to one.
+`shape`, `delivery`, and `reconciler` were extracted and generalized from
+a working deployment's own dataset-class, category, and ownership maps,
+every site-specific value replaced with a generic one; `disks` closes the
+cross-repo gap of the same physical device being named independently in
+`nixluks`/`nixvault`.
+
+**`layout` spent a while extracted into a standalone `nixlayout` repo, and
+that split has been reversed** — see `modules/layout.nix`'s own header for
+the full argument (a ZFS-shaped "pre-pool vs post-pool" boundary that a
+public module family covering every storage architecture cannot rely on).
+While the split lasted, real consumers kept reading the OLD path
+defensively — `nixboot`'s `esp.fromLayout` and `nixvault`'s
+`deviceFromLayout` both read `config.nixstorage.layout.images or { }` —
+and every one of them silently resolved to `{ }` for the entire life of
+the split, because `or { }` cannot tell "option absent" from "declared,
+empty". Restoring `nixstorage.layout.*` exactly as it was fixes those
+consumers with zero edits on their side; it is also why this option root
+must never move again without sweeping every defensive reader in the same
+change.
 
 **Known gap, stated plainly rather than glossed over:** `reconciler.nix`,
 as it stands, converges **ownership and top-directory mode only** — it
@@ -524,7 +618,8 @@ of that contract.
 - [x] `nixosModules.shape` (`modules/shape.nix`)
 - [x] `nixosModules.delivery` (`modules/delivery.nix`)
 - [x] `nixosModules.reconciler` (`modules/reconciler.nix` + `modules/reconcile.sh`) — ownership/mode only, see the gap noted above
-- [x] `nixosModules.layout` (`modules/layout.nix` + `modules/layout-verify.sh` + `lib/image.nix` + `lib/partition-roles.nix`) — image build + read-only verify; never a block-device write, see the safety model above
+- [x] `nixosModules.disks` (`modules/disks.nix`) — the physical-disk table, read defensively by `nixluks`/`nixvault`
+- [x] `nixosModules.layout` (`modules/layout.nix` + `modules/layout-verify.sh` + `lib/image.nix` + `lib/partition-roles.nix`) — image build + read-only verify; never a block-device write, see [The safety model](#the-safety-model-nixstorage-never-touches-a-block-device) above
 - [ ] a reconciler for `nixstorage.shape`'s own `recordsize`/`compression` model
 - [x] `nixid.posix` (a different repo — the RIGHTS half of this same design) — shipped
 
@@ -539,7 +634,18 @@ consumed here by name, never the reverse),
 (actually mounts what a `delivery.nix` category with `mount = "nfs"`
 describes), [nixbackup](https://github.com/julian-corbet/nixbackup-corbet-ch)
 (ZFS backup-destination discipline — a sibling in spirit, same "hard-won
-rules as enforced modules, not documentation to remember" shape), and
+rules as enforced modules, not documentation to remember" shape),
+[nixboot](https://github.com/julian-corbet/nixboot-corbet-ch) (the ESP
+`nixstorage.layout` carves as a `role = "esp"` partition is what
+`nixboot.esp` expects mounted, once a real host has booted from it; its
+own `esp.fromLayout` reads `config.nixstorage.layout.images or { }`
+defensively, no flake input in either direction — the same pattern
+`nixluks`/`nixvault` already use for `nixstorage.disks`),
+[nixvault](https://github.com/julian-corbet/nixvault-corbet-ch) (the
+`luks`-role slot `nixstorage.layout` reserves-but-never-formats is what
+`nixvault-create` later turns into a real LUKS2 volume, by hand, on the
+console; its own `deviceFromLayout` reads the same option, the same
+defensive way), and
 [nixnas](https://github.com/julian-corbet/nixnas) (the appliance this
 model was extracted out of). Use any of them together or standalone.
 

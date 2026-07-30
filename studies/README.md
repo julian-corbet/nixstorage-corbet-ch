@@ -12,9 +12,15 @@ into something durable.
   mounts (and therefore per-subtree mount options) impossible, and why the
   fix costs exactly one bit.
 - [`sandboxed-image-building.md`](sandboxed-image-building.md) — the
-  measurement behind `nixstorage.layout`: why `sgdisk`/`sfdisk`/`mkfs.vfat
-  -C` need no loop device and no root to build a real, formatted GPT image
-  as a pure Nix derivation, and why a partition's byte offset is queried
-  back from `sgdisk` rather than recomputed by hand.
+  measurement behind `nixstorage.layout`: why `sgdisk`/`sfdisk`/
+  `mkfs.vfat -C` need no loop device and no root to build a real,
+  formatted GPT image as a pure Nix derivation, and why a partition's byte
+  offset is queried back from `sgdisk` rather than recomputed by hand.
+
+This second study briefly lived in a standalone `nixlayout` repo's own
+`studies/` when `modules/layout.nix` was extracted out of this one; that
+split has been reversed (see the main [README](../README.md)'s "Why
+layout is not a separate repo" for the argument), and it is back here with
+`modules/layout.nix` itself.
 
 See the main [README](../README.md) for the project itself.

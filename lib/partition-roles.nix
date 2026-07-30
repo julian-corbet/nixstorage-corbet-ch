@@ -14,7 +14,7 @@
 # has no opinion on; add one here, with a reason, rather than smuggling a
 # type-GUID in some other way.
 #
-# `formatted` says what modules/lib/image.nix actually writes into that
+# `formatted` says what lib/image.nix actually writes into that
 # slot when it builds an image: `"vfat"` for the one role this repo puts
 # real filesystem content into, `null` for the two it deliberately leaves
 # empty. Both empty cases are empty for the SAME underlying reason stated
@@ -50,7 +50,7 @@
       CONSUMING system creates later -- a ZFS pool member, a swap device,
       anything this repo's own shape.nix/reconciler.nix have no opinion on
       because it does not exist as a mountable dataset yet. Carved here and
-      left completely empty; nothing in modules/lib/image.nix ever writes a
+      left completely empty; nothing in lib/image.nix ever writes a
       single byte into a "raw" partition's own data region.
     '';
     formatted = null;

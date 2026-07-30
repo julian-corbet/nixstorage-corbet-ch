@@ -76,7 +76,7 @@ future version of this module ever exposes `sgdisk`'s own `-a`/
 `--set-alignment` override (coarser alignment on some flash media wants a
 bigger unit), or on a sector size other than 512 bytes (4Kn drives)?
 
-**Hypothesis:** probably not without revisiting it — the constant is
+**Hypothesis:** probably not without revisiting it -- the constant is
 measured against ONE alignment/sector-size combination, not derived
 symbolically from whatever `lib/image.nix` actually asks `sgdisk` for. If
 alignment or sector size ever become configurable, this constant needs to
@@ -101,3 +101,12 @@ question is resolved?
 
 **Status:** open. No real drift case from a foreign image-building tool has
 been reproduced against this check yet.
+
+## Renumbering history
+
+001/002 above are original to this file. 003/004 above were briefly
+renumbered 001/002 in a standalone `nixlayout` repo's own
+`experiments/README.md` when `modules/layout.nix` was extracted out of
+this one; that split has been reversed (see the main
+[README](../README.md)'s "Why layout is not a separate repo" for the
+argument), and 003/004 are restored to their original numbers here.
