@@ -100,6 +100,26 @@
         "type": "github"
       }
     },
+    "nixtest": {
+      "inputs": {
+        "nixpkgs": [
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1785418816,
+        "narHash": "sha256-2x7/Svox5Yznk2P5OjUg6Xj0yrshLZA4cmFloDZKvSY=",
+        "owner": "julian-corbet",
+        "repo": "nixtest-corbet-ch",
+        "rev": "8d9ae75992e3eff1f5ff3c06cf74b6a44f630bfb",
+        "type": "github"
+      },
+      "original": {
+        "owner": "julian-corbet",
+        "repo": "nixtest-corbet-ch",
+        "type": "github"
+      }
+    },
     "pre-commit-hooks-nix": {
       "inputs": {
         "flake-compat": [
@@ -133,7 +153,8 @@
     "root": {
       "inputs": {
         "nixiam": "nixiam",
-        "nixpkgs": "nixpkgs"
+        "nixpkgs": "nixpkgs",
+        "nixtest": "nixtest"
       }
     },
     "system-manager": {

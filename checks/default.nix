@@ -28,7 +28,7 @@
 # mechanically proving the "pure table, no acting surface" claim two paragraphs up rather than
 # leaving it as prose. Deliberately NOT applied to `shape`/`delivery` (in scope, but not asked
 # for in this pass) or `reconciler` (a real systemd oneshot -- this check would be WRONG there).
-{ pkgs, lib, nixpkgs, system, nixiam, shapeModule, deliveryModule, reconcilerModule, disksModule, layoutModule, scrubModule }:
+{ pkgs, lib, nixpkgs, system, nixiam, nixtest, shapeModule, deliveryModule, reconcilerModule, disksModule, layoutModule, scrubModule }:
 
 let
   # Shared by every NixOS-eval fixture in this file, including `purity.nix`'s own bare/alone
@@ -106,7 +106,7 @@ let
   # scoped to `disks.nix` alone. `populatedConfig` is a realistic, non-default use of the table
   # (one real-shaped disk) -- not the composed-host example, which never declares
   # `nixstorage.disks` at all (see examples/host/configuration.nix).
-  purityResults = import ./purity.nix {
+  purityResults = nixtest.lib.mkPurityChecks {
     inherit lib nixpkgs system bareStubs;
     label = "disks";
     modulePath = disksModule;
@@ -116,6 +116,11 @@ let
         role = "pool-member";
       };
     };
+    # GAINED by the move: this repo's own copy never had `factPaths` at all, so a derivation
+    # sitting in nixstorage.disks -- a package accidentally assigned to `role`, say -- would have
+    # passed silently. `nixstorage.disks` is precisely the fact consumers read BY NAME, so it must
+    # be provably plain data or the by-name discipline rests on nothing.
+    factPaths = [ "nixstorage.disks" ];
   };
 
   # ── nixstorage.layout: eval-time checks + the two build-level proofs ────────────────────

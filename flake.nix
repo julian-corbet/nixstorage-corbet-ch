@@ -18,9 +18,24 @@
       url = "github:julian-corbet/nixiam-corbet-ch";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+
+    # A different CATEGORY of input from nixiam above, and the distinction matters because this
+    # family's rule is "no flake input on a sibling". nixtest is a lib-only TEST FIXTURE -- no
+    # NixOS module, no `enable`, nothing that acts on a host -- and is never composed into
+    # anything this flake exports; it is reached only from `checks`.
+    #
+    # It is an input rather than a copy because the copy failed. checks/purity.nix used to carry a
+    # hand-kept version of nixtest.lib.mkPurityChecks, and it quietly stopped matching: it never
+    # gained the `factPaths` plain-data proof the original grew, so a derivation sitting in
+    # nixstorage.disks would have passed silently while the check still reported success. One
+    # recipe taken as a dependency cannot drift from itself the way three hand-kept copies did.
+    nixtest = {
+      url = "github:julian-corbet/nixtest-corbet-ch";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
-  outputs = { self, nixpkgs, nixiam }:
+  outputs = { self, nixpkgs, nixiam, nixtest }:
     let
       lib = nixpkgs.lib;
       supportedSystems = [ "x86_64-linux" "aarch64-linux" ];
@@ -155,7 +170,7 @@
       checks = forAllSystems (system:
         import ./checks {
           pkgs = pkgsFor system;
-          inherit lib nixpkgs system nixiam;
+          inherit lib nixpkgs system nixiam nixtest;
           shapeModule = self.nixosModules.shape;
           deliveryModule = self.nixosModules.delivery;
           reconcilerModule = self.nixosModules.reconciler;
