@@ -155,11 +155,30 @@ correctly.
 
 ## Non-goals
 
-- **It does not mount anything.** A `delivery.nix` category with
-  `mount = "nfs"` describes a fact for a client-side mount module (a
-  role [nixshare](https://github.com/julian-corbet/nixshare-corbet-ch)
-  fills) to act on. There is no `systemd.mounts`/`fileSystems.<path>`
-  entry anywhere in this repo.
+- **It does not implement the two mount mechanisms it does not own.** This one
+  needs stating precisely, because the earlier sweeping version of it ("does not
+  mount anything") was wrong and created an orphan: `delivery.nix` declares a
+  `mount` field, documents that `mount = "zfs"` means the dataset is delivered by
+  mounting it locally — and then disowned the mechanism to an unnamed module that
+  did not exist. A fact with no owner for its mechanism is a gap, not a boundary.
+
+  What is actually true:
+
+  - **The ZFS-native local case IS this repo's**, and always was. A pool's own
+    `mountpoint` property is what mounts a dataset, and `shape.nix` owns dataset
+    properties. `mount = "zfs"` needs no further mechanism anywhere.
+  - **Client-side NETWORK mounts are not.** A category with `mount = "nfs"` is a
+    fact for a client-side mount module — the role
+    [nixshare](https://github.com/julian-corbet/nixshare-corbet-ch) fills.
+  - **A container's mount TABLE is not.** Rendering `lxc.mount.entry` lines, an
+    idmap, or a pod volume belongs to whichever substrate owns that container.
+    Such a consumer should read a category BY NAME from
+    `nixstorage.delivery.categories` rather than restating a host path, exactly as
+    every consumer of `nixstorage.disks` names a disk instead of copying a by-id
+    string.
+
+  There is still no `systemd.mounts` or `fileSystems.<path>` entry in this repo —
+  but that is a consequence of the above, not the rule itself.
 - **It does not back anything up.** ZFS send/receive discipline,
   replication-destination invariants, and freshness monitoring are
   [nixbackup](https://github.com/julian-corbet/nixbackup-corbet-ch)'s
