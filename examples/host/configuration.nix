@@ -300,7 +300,7 @@
   # `nixstorage-layout-verify` never writes anything -- see this option's
   # own description and modules/layout.nix's header for the full safety
   # model. `device` is a placeholder /dev/disk/by-id path precisely
-  # because a real one here would be exactly the kind of fleet detail a
+  # because a real one here would be exactly the kind of host-specific detail a
   # public repo must never carry; `nix flake check`'s own checks/
   # directory proves the verify SCRIPT itself actually works, against a
   # real built image, without ever touching a real device.
@@ -309,6 +309,34 @@
   nixstorage.layout.verify.targets.example-host-disk = {
     device = "/dev/disk/by-id/example-host-disk-uuid";
     image = "example-host-disk";
+  };
+
+  # ── SCRUB: idle-/RAM-/temperature-gated integrity verification ---------
+  # One job with a group (proving the group-declaration assertion passes)
+  # and one ungrouped job (proving `group = null` never needs a
+  # `nixstorage.scrub.groups` entry at all).
+  nixstorage.scrub = {
+    enable = true;
+    idle.effectiveCores = 0.25; # a small/burstable example host
+    groups.shared-controller = { };
+
+    jobs = {
+      archive = {
+        fsType = "xfs";
+        target = "/tank/archive";
+        group = "shared-controller";
+        priority = 10;
+        minCycleDays = 30;
+        tempDevices = [ "/dev/disk/by-id/example-archive-0" ];
+      };
+
+      root = {
+        fsType = "btrfs";
+        target = "/";
+        priority = 20;
+        minCycleDays = 30;
+      };
+    };
   };
 
   nixid.posix.identities = {

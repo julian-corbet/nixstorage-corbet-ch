@@ -28,7 +28,7 @@
 # mechanically proving the "pure table, no acting surface" claim two paragraphs up rather than
 # leaving it as prose. Deliberately NOT applied to `shape`/`delivery` (in scope, but not asked
 # for in this pass) or `reconciler` (a real systemd oneshot -- this check would be WRONG there).
-{ pkgs, lib, nixpkgs, system, nixid, shapeModule, deliveryModule, reconcilerModule, disksModule, layoutModule }:
+{ pkgs, lib, nixpkgs, system, nixid, shapeModule, deliveryModule, reconcilerModule, disksModule, layoutModule, scrubModule }:
 
 let
   # Shared by every NixOS-eval fixture in this file, including `purity.nix`'s own bare/alone
@@ -82,6 +82,22 @@ let
 
   disksBuildFails = extraConfig:
     !(builtins.tryEval (builtins.seq (evalDisksOnly extraConfig).system.build.toplevel true)).success;
+
+  # `evalScrubOnly`: `nixstorage.scrub` on its own -- no dependency on
+  # shape/delivery/reconciler/disks, same reasoning as `evalDisksOnly`
+  # above.
+  evalScrubOnly = extraConfig:
+    (import (nixpkgs + "/nixos/lib/eval-config.nix") {
+      inherit system;
+      modules = [
+        scrubModule
+        extraConfig
+        bareStubs
+      ];
+    }).config;
+
+  scrubBuildFails = extraConfig:
+    !(builtins.tryEval (builtins.seq (evalScrubOnly extraConfig).system.build.toplevel true)).success;
 
   check = name: ok: detail: { inherit name ok detail; };
 
@@ -140,6 +156,59 @@ let
         })
       )
       "two nixstorage.disks entries naming two different devices should never fail the build")
+
+    # --- nixstorage.scrub: a job's `group` must be declared in `groups` -----
+    (check "scrub/undeclared-group-fails-the-build"
+      (scrubBuildFails {
+        nixstorage.scrub.enable = true;
+        nixstorage.scrub.jobs.root = {
+          fsType = "btrfs";
+          target = "/";
+          minCycleDays = 7;
+          group = "missing";
+        };
+      })
+      "expected a job referencing an undeclared nixstorage.scrub.groups name to fail the build, but it succeeded")
+
+    (check "scrub/declared-group-builds-fine"
+      (
+        !(scrubBuildFails {
+          nixstorage.scrub.enable = true;
+          nixstorage.scrub.groups.shared = { };
+          nixstorage.scrub.jobs.root = {
+            fsType = "btrfs";
+            target = "/";
+            minCycleDays = 7;
+            group = "shared";
+          };
+        })
+      )
+      "a job whose group IS declared in nixstorage.scrub.groups should never fail the build on its own")
+
+    # --- nixstorage.scrub: no field may carry the internal ':'/',' job-line delimiter ---
+    (check "scrub/delimiter-in-target-fails-the-build"
+      (scrubBuildFails {
+        nixstorage.scrub.enable = true;
+        nixstorage.scrub.jobs.root = {
+          fsType = "btrfs";
+          target = "/tank:evil";
+          minCycleDays = 7;
+        };
+      })
+      "expected a nixstorage.scrub target containing ':' to fail the build (it would corrupt the internal job-line encoding), but it succeeded")
+
+    (check "scrub/plain-target-builds-fine"
+      (
+        !(scrubBuildFails {
+          nixstorage.scrub.enable = true;
+          nixstorage.scrub.jobs.root = {
+            fsType = "btrfs";
+            target = "/tank/archive";
+            minCycleDays = 7;
+          };
+        })
+      )
+      "a plain nixstorage.scrub target with no delimiter characters should never fail the build on its own")
   ];
 
   failed = builtins.filter (r: !r.ok) results;
@@ -177,6 +246,7 @@ let
       deliveryModule
       reconcilerModule
       layoutModule
+      scrubModule
       nixid.nixosModules.posix
       ../examples/host/configuration.nix
     ];

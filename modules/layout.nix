@@ -473,7 +473,7 @@ let
           entries and the backup-header location all land at the wrong offsets,
           and the medium is not readable as partitioned at all.
 
-          Real example from this fleet: the nixnas rescue stick is 512/512, and
+          Real example from these hosts: the nixnas rescue stick is 512/512, and
           the Elitebook's NVMe is 4096/4096. The SAME declared layout therefore
           cannot produce one image serving both -- it needs two, differing only
           in this value.
@@ -645,8 +645,8 @@ in
           `systemctl start nixstorage-layout-verify.service`. No guessed
           default cadence, the same reasoning as
           `nixstorage.reconciler.onCalendar`: even a read-only pass against
-          real block devices is an operational decision for whoever owns
-          the fleet, not a value this module should silently pick.
+          real block devices is an operational decision for the operator,
+          not a value this module should silently pick.
         '';
       };
 

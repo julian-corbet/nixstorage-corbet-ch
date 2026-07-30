@@ -29,20 +29,22 @@
     in
     {
       # ---------------------------------------------------------------
-      # FIVE independently toggleable modules under one `nixstorage.*`
+      # SIX independently toggleable modules under one `nixstorage.*`
       # namespace -- same shape as nixbackup's three (destinations/
       # autobootstrap/monitor). `shape`, `delivery` and `disks` are pure
       # schema + assertion, no systemd unit, nothing to "enable" -- import
       # any one on its own to get validated, machine-readable declarations
-      # with zero runtime footprint. `reconciler` and `layout` are the two
-      # modules that actually act -- `reconciler` on ownership and
-      # top-directory mode only (see README's Status for the one open gap:
-      # nothing yet runs the `zfs set` half `shape.nix`'s own model
-      # describes), `layout` on nothing but READING a live device back
-      # (see modules/layout.nix's own header for the full safety model --
-      # it never writes to a block device, only ever to a plain file it
-      # builds itself) -- hence `default` for the common case of wanting
-      # all five.
+      # with zero runtime footprint. `reconciler`, `layout`, and `scrub`
+      # are the three modules that actually act -- `reconciler` on
+      # ownership and top-directory mode only (see README's Status for the
+      # one open gap: nothing yet runs the `zfs set` half `shape.nix`'s
+      # own model describes), `layout` on nothing but READING a live
+      # device back (see modules/layout.nix's own header for the full
+      # safety model -- it never writes to a block device, only ever to a
+      # plain file it builds itself), and `scrub` on an idle-/RAM-/
+      # temperature-gated btrfs/xfs/zfs scrub heartbeat (see
+      # modules/scrub.nix's own header) -- hence `default` for the common
+      # case of wanting all six.
       #
       # `layout` spent a while extracted out of here into a standalone
       # `nixlayout` repo, on the grounds that shape/delivery/reconciler all
@@ -64,6 +66,11 @@
       nixosModules.reconciler = ./modules/reconciler.nix;
       nixosModules.disks = ./modules/disks.nix;
       nixosModules.layout = ./modules/layout.nix;
+      # nixstorage.scrub -- idle-/RAM-/temperature-gated btrfs/xfs/zfs scrub
+      # scheduling (modules/scrub.nix). NixOS-only (see that module's own
+      # SCOPE note) -- deliberately absent from systemManagerModules below,
+      # unlike its five siblings.
+      nixosModules.scrub = ./modules/scrub.nix;
       nixosModules.default = {
         imports = [
           self.nixosModules.shape
@@ -71,6 +78,7 @@
           self.nixosModules.reconciler
           self.nixosModules.disks
           self.nixosModules.layout
+          self.nixosModules.scrub
         ];
       };
 
@@ -82,7 +90,10 @@
       # argument nixshare's own client-side core makes for its watchdog.
       # UNCONFIRMED against a real system-manager-applied host (see
       # README's Non-goals); flagged rather than silently assumed, same
-      # convention nixshare uses for its own equivalent caveat.
+      # convention nixshare uses for its own equivalent caveat. `scrub` is
+      # deliberately NOT among these five -- it drives systemd.timers plus a
+      # generated heartbeat script against `/proc/loadavg`/`/proc/meminfo`
+      # directly, with no system-manager equivalent attempted.
       #
       # `disks` was missing from this list entirely from the commit that
       # introduced modules/disks.nix (it reached nixosModules above, never
@@ -121,7 +132,7 @@
       #   }
       lib.buildLayoutImage = { pkgs }: import ./lib/image.nix { inherit pkgs; };
 
-      # All five of this repo's modules, PLUS nixid's posix identity
+      # All six of this repo's modules, PLUS nixid's posix identity
       # module -- the one thing nixstorage can name an owner/identity
       # reference to but must never define itself -- composed into one
       # system from examples/host, PLUS a handful of standalone eval-tests
@@ -147,6 +158,7 @@
           reconcilerModule = self.nixosModules.reconciler;
           disksModule = self.nixosModules.disks;
           layoutModule = self.nixosModules.layout;
+          scrubModule = self.nixosModules.scrub;
         });
 
       formatter = forAllSystems (system: (pkgsFor system).nixpkgs-fmt);

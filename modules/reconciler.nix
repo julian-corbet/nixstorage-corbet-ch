@@ -10,7 +10,7 @@
 #
 # Extracted, with its exact semantics preserved on purpose, from a real,
 # already-running private reconciler that has been chowning/chmodding a
-# multi-pool, multi-hundred-terabyte fleet on an unattended schedule for
+# multi-pool, multi-hundred-terabyte deployment on an unattended schedule for
 # months. The actual chown/chmod rules this buys you -- recursive chown vs
 # top-dir-only chmod, mis-owned-only, never dereferencing a symlink, roots
 # before leaves, shallow leaves before deep ones, prune honoured on every
@@ -98,7 +98,7 @@ let
       Declared identities: ${availableIdentities}.${optionalString (!posixDeclared) notImportedHint}
     '';
 
-  # ⚠ A group NAME is resolved against two independent tables -- the fleet
+  # ⚠ A group NAME is resolved against two independent tables -- the cross-host
   # group registry first, then an identity's own UPG gid. If the same name
   # exists in BOTH with different numbers, silently preferring one is how a
   # tree ends up chowned to a gid nobody declared and nobody can find. NFS
@@ -622,7 +622,7 @@ in
               checked by every structural assertion above -- but this pass
               must never chown or chmod it, because something else already
               owns its data's ownership lifecycle (a different, already-
-              running system sharing this fleet's numbering scheme; a
+              running system sharing this registry's numbering scheme; a
               human-managed exception). Automatically added to the
               aggregate prune set (see `prune` below) so that an ANCESTOR
               root's own recursive sweep does not silently "fix" this
@@ -807,7 +807,7 @@ in
           OnCalendar = cfg.onCalendar;
           Persistent = true;
           # Spreads out an identical OnCalendar value shared across many
-          # hosts of the same fleet -- avoids every host's chown/chmod pass
+          # hosts -- avoids every host's chown/chmod pass
           # landing on the same wall-clock tick against a shared backing pool.
           RandomizedDelaySec = "5m";
         };
