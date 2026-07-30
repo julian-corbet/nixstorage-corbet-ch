@@ -150,9 +150,8 @@
       # actually declared under the OLD path this file's own `nixid` input
       # once pointed at, silently resolving `identities`/`groups` to the
       # empty set. See README's "Why nixstorage depends on nixiam" and
-      # Status section. The one thing genuinely still pending is
-      # publication: `github:julian-corbet/nixiam-corbet-ch` above has no
-      # public remote yet, so this input does not resolve until it does.
+      # Status section. `github:julian-corbet/nixiam-corbet-ch` above is
+      # now published and resolves normally -- see flake.lock.
       checks = forAllSystems (system:
         import ./checks {
           pkgs = pkgsFor system;

@@ -1,9 +1,9 @@
 # checks/purity.nix
 #
-# Generalises nixposix/modules/posix.nix's own `posix-purity` check group (see that repo's
+# Generalises nixiam/modules/posix.nix's own `posix-purity` check group (see that repo's
 # checks/default.nix, group 1) into a reusable function any registry-shaped module in this
 # family can call against its own module file, instead of re-deriving the same proofs by hand
-# per repo. Never a flake input on nixposix for this -- the house rule ("no flake inputs on
+# per repo. Never a flake input on nixiam for this -- the house rule ("no flake inputs on
 # other nix* repos, read siblings defensively") applies in its strongest form here: this is not
 # even a cross-repo DATA read, it is a test HELPER, and the fix for "don't want to retype this"
 # is the one nixluks already took for lib/device-path.nix ("kept inline rather than shared so
@@ -43,18 +43,19 @@
 #
 # ── What this does NOT prove, stated as honestly as what it does ────────────────────────────
 #
-# `systemd.services` and `environment.systemPackages` are the two surfaces nixposix's own
+# `systemd.services` and `environment.systemPackages` are the two surfaces nixiam's own
 # module header names by name, and the two `baseSurfaces` below watches unconditionally --
 # they are not the only way a module could stop being pure data (a stray `users.users.*` entry
-# with no `pkgs` involved at all would dodge both). `extraSurfaces` exists for exactly that gap
-# -- see nixmachines' own copy of this file, which hands it `networking.hostName` because that
-# module's own header promises it by name, via the load-bearing eval-diff (2) and its
-# meta-test only, deliberately NOT the text scan (3): a registry's own option `description` is
-# exactly the place a caller legitimately needs to name a guarded option in PROSE, and a
-# literal scan cannot tell that string apart from an actual write -- confirmed the first time
-# nixmachines' own copy tried it, against a real, correct `description` string, not a
-# violation. `modules/disks.nix`'s own header makes no such named promise beyond "nothing here
-# partitions, formats, mounts, opens, or touches a device" -- prose actions with no single
+# with no `pkgs` involved at all would dodge both). `extraSurfaces` exists for exactly that gap:
+# a caller whose own module header promises purity of some fourth surface by name (say,
+# `networking.hostName`) can watch it too, via the load-bearing eval-diff (2) and its meta-test
+# only, deliberately NOT the text scan (3) -- a registry's own option `description` is exactly
+# the place a caller legitimately needs to name a guarded option in PROSE ("this behaves like
+# `networking.hostName` on NixOS"), and a literal scan cannot tell that string apart from an
+# actual write, so extending the text scan to `extraSurfaces` would false-positive on the very
+# prose this kind of module is expected to carry. `modules/disks.nix`'s own header makes no such
+# named promise beyond "nothing here partitions, formats, mounts, opens, or touches a device" --
+# prose actions with no single
 # clean option-path to watch -- so `extraSurfaces` is left at its empty default here. A module
 # that adds some fourth, still-unwatched NixOS-only primitive is this generalisation's own
 # remaining honest gap -- watch for it explicitly the day it becomes a real risk, rather than
@@ -87,7 +88,7 @@ let
 
   sorted = lib.sort (a: b: a < b);
 
-  # The two surfaces nixposix's own module header names by name -- see this file's own header
+  # The two surfaces nixiam's own module header names by name -- see this file's own header
   # for why these two are the unconditional default rather than an exhaustive list.
   baseSurfaces = [
     {
@@ -144,10 +145,11 @@ let
   # tell that apart from an actual write, and a caller-supplied surface has no guarantee its
   # own module avoids the vocabulary the way `systemd.services`/`environment.systemPackages`
   # mentions happen to here (both currently occur only inside `#` header comments -- see the
-  # eval-diff pair above for the check that holds regardless either way). Concretely: this
-  # fired a false positive in nixmachines' own copy of this file, against `networking.hostName`
-  # mentioned correctly inside a real `description` string, not a violation -- exactly the
-  # failure mode this scoping exists to avoid.
+  # eval-diff pair above for the check that holds regardless either way). Concretely: a text
+  # scan extended to `extraSurfaces` would false-positive the moment a caller's own module
+  # mentions, say, `networking.hostName` correctly inside a real `description` string -- not a
+  # violation, but indistinguishable from one by a literal scan -- exactly the failure mode this
+  # scoping exists to avoid.
   sourceScanChecks = s: [
     (check "${label}-purity/source-never-mentions-${s.path}"
       (!(lib.hasInfix s.path moduleSrc))

@@ -71,9 +71,12 @@
         "system-manager": "system-manager"
       },
       "locked": {
-        "narHash": "sha256-h76ipU0UPU8XE4w0WkJwI0j4bUA9uf4EYxoUAfCiTIQ=",
-        "path": "/path/to/nixiam",
-        "type": "path"
+        "lastModified": 1785407957,
+        "narHash": "sha256-pQz08aTYgo24tB9z+gAf9KYJqcTZ/l47WWcbhBtOTok=",
+        "owner": "julian-corbet",
+        "repo": "nixiam-corbet-ch",
+        "rev": "342be7cef63dbc06a15a6b50e4f06825d5c7d1cd",
+        "type": "github"
       },
       "original": {
         "owner": "julian-corbet",

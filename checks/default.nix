@@ -24,7 +24,7 @@
 # two build proofs remains eval-only.
 #
 # `disks-purity` (below, via `./purity.nix`) is a fourth kind, specific to `modules/disks.nix`
-# only -- a generalisation of nixposix/modules/posix.nix's own `posix-purity` check group,
+# only -- a generalisation of nixiam/modules/posix.nix's own `posix-purity` check group,
 # mechanically proving the "pure table, no acting surface" claim two paragraphs up rather than
 # leaving it as prose. Deliberately NOT applied to `shape`/`delivery` (in scope, but not asked
 # for in this pass) or `reconciler` (a real systemd oneshot -- this check would be WRONG there).
