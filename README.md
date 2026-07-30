@@ -12,7 +12,7 @@ converged forever, never a one-time `zfs create` flag left to drift), and
 where its contents actually surface for a human or a container to use
 (a `$HOME` leaf, an XDG role, which class of consumer even gets it). It
 does not decide who owns a dataset on disk — see
-[Why nixstorage depends on nixid, and never the reverse](#why-nixstorage-depends-on-nixid-and-never-the-reverse)
+[Why nixstorage depends on nixiam, and never the reverse](#why-nixstorage-depends-on-nixiam-and-never-the-reverse)
 for why that third concern lives one repo over, consumed here by name
 only.
 
@@ -47,7 +47,7 @@ was the fix for a coupling that had already started to bite.
 - **`modules/reconciler.nix`** (`nixstorage.reconciler`) — the first module
   that actually acts, scoped to **ownership and top-directory mode**:
   declares tree `ownership` roots and per-app `leaves`, resolves each
-  one's `owner`/`group`/`identity` name against `nixid.posix.identities`/
+  one's `owner`/`group`/`identity` name against `nixiam.posix.identities`/
   `.groups`, and idempotently `chown -h`/`chmod`s real, live paths to
   match — via `modules/reconcile.sh`, a real, already-running shell
   script, not a stub. Nothing here creates or destroys a dataset, and
@@ -112,7 +112,7 @@ header for the full argument, and [Status](#status) below for what the
 split cost while it lasted — real consumers silently reading
 `nixstorage.layout.*` as always-empty for the entire life of the split.
 
-## Why nixstorage depends on nixid, and never the reverse
+## Why nixstorage depends on nixiam, and never the reverse
 
 A leaf's identity — uid, gid, which of the two real ownership-drop
 patterns it uses (`"native"`: runs as its own non-root uid directly; or
@@ -120,8 +120,8 @@ patterns it uses (`"native"`: runs as its own non-root uid directly; or
 drops privilege itself via `PUID`/`PGID`), and the Kubernetes
 `securityContext` a workload touching the same data needs to agree
 with — is declared exactly once, in
-[nixid](https://github.com/julian-corbet/nixid-corbet-ch), under a name
-(`nixid.posix.identities.<name>`, in the design this repo implements).
+[nixiam](https://github.com/julian-corbet/nixiam-corbet-ch), under a name
+(`nixiam.posix.identities.<name>`, in the design this repo implements).
 `nixstorage.reconciler` consumes that name; it never holds a raw uid/gid
 of its own — a tree ROOT's `owner`/`group` may still be a literal numeric
 string (a human account with no Kubernetes workload behind it at all has
@@ -130,8 +130,8 @@ hatch, on purpose: it is *always* a name, because that is what makes the
 on-disk uid and the k8s `runAsUser`/`PUID` checkable against each other at
 all, rather than two numbers someone has to remember to keep in sync by
 hand. This is the whole point of the split, not an implementation detail
-of it: **nixid answers "who", nixstorage answers "where and what
-shape."** If nixid ever learned a dataset name or a pool path, the
+of it: **nixiam answers "who", nixstorage answers "where and what
+shape."** If nixiam ever learned a dataset name or a pool path, the
 layering would have inverted — the identity module would now depend on
 the storage module's own vocabulary, and the one thing this split exists
 to prevent (an on-disk chown and a pod's `runAsUser` silently drifting
@@ -140,16 +140,16 @@ exactly as possible as it was before the split, just with the duplication
 moved one file over instead of removed.
 
 Concretely: `nixstorage.reconciler.leaves."/tank/apps/data" = { identity =
-"example-app"; mode = "0750"; }` names an identity; `nixid.posix.
+"example-app"; mode = "0750"; }` names an identity; `nixiam.posix.
 identities.example-app = { uid = 3002; variant = "native"; }` defines it
-once, and `nixid.posix.podSecurity.example-app` (derived, read-only) is
+once, and `nixiam.posix.podSecurity.example-app` (derived, read-only) is
 the SAME identity reshaped into a pod/container `securityContext`. Change
 the uid in one place and both the on-disk chown and the securityContext
 your Kubernetes manifest builds from it move together, because there is
 only one place a uid was ever actually written down — and
 `nixstorage.reconciler`'s own per-leaf assertion checks exactly this
-consistency (`nixid.posix.podSecurity.<name>.pod.runAsUser ==
-nixid.posix.identities.<name>.uid`, or the `PUID`-string equivalent for a
+consistency (`nixiam.posix.podSecurity.<name>.pod.runAsUser ==
+nixiam.posix.identities.<name>.uid`, or the `PUID`-string equivalent for a
 `"puid"` identity) on every eval, not just at the moment someone wrote it
 correctly.
 
@@ -288,7 +288,7 @@ made declarative and self-checking:
 
 - it forces `o+x` into the effective mode `nixstorage.reconciler`'s own
   `ownership.<path>.mode` ends up writing for this dataset (mode lives in
-  `nixstorage.reconciler`, never in `nixid` — only uid/gid are looked up
+  `nixstorage.reconciler`, never in `nixiam` — only uid/gid are looked up
   by identity name), and
 - it **asserts** that every declared ancestor of that dataset in
   `nixstorage.shape.datasets` also sets `subtreeMountable = true` — a
@@ -308,16 +308,16 @@ silently assumed safe (see `experiments/README.md` #001).
 # flake.nix (consumer side)
 {
   inputs.nixstorage.url = "github:julian-corbet/nixstorage-corbet-ch";
-  inputs.nixid.url = "github:julian-corbet/nixid-corbet-ch";
+  inputs.nixiam.url = "github:julian-corbet/nixiam-corbet-ch";
 
-  outputs = { self, nixpkgs, nixstorage, nixid, ... }: {
+  outputs = { self, nixpkgs, nixstorage, nixiam, ... }: {
     nixosConfigurations.example-host = nixpkgs.lib.nixosSystem {
       modules = [
         nixstorage.nixosModules.shape
         nixstorage.nixosModules.delivery
         nixstorage.nixosModules.reconciler
         nixstorage.nixosModules.layout
-        nixid.nixosModules.posix # the "who" this repo consumes by name
+        nixiam.nixosModules.posix # the "who" this repo consumes by name
         ./configuration.nix
       ];
     };
@@ -351,7 +351,7 @@ nixstorage.reconciler.leaves."/tank/apps/data" = {
   mode = "0750";
 };
 
-nixid.posix.identities.example-app = { uid = 3002; variant = "native"; };
+nixiam.posix.identities.example-app = { uid = 3002; variant = "native"; };
 ```
 
 ```nix
@@ -455,7 +455,7 @@ ownership + top-directory mode only, via `modules/reconcile.sh`):
   (a manual invocation can always add the flag itself regardless).
 - `ownership.<path>` — a tree ROOT, keyed by absolute filesystem path.
   `owner`/`group` are each either a literal numeric uid/gid **string**, or
-  a name resolved against `nixid.posix.identities`/`.groups` (checked by
+  a name resolved against `nixiam.posix.identities`/`.groups` (checked by
   assertion, not left to fail as a raw missing-attribute trace). `mode` —
   full 4-digit octal string (e.g. `"2750"`), applied to the top directory
   only, ever; if the matching `nixstorage.shape.datasets` entry sets
@@ -471,9 +471,9 @@ ownership + top-directory mode only, via `modules/reconcile.sh`):
 - `leaves.<path>` — an app LEAF, keyed by absolute filesystem path, always
   swept recursively, after every root, shallowest-path-first (so a leaf
   nested inside a root — or inside a broader leaf — always re-wins its
-  own content last). `identity` — a name in `nixid.posix.identities`,
+  own content last). `identity` — a name in `nixiam.posix.identities`,
   **no numeric escape hatch** (see [Why nixstorage depends on
-  nixid](#why-nixstorage-depends-on-nixid-and-never-the-reverse) for why
+  nixiam](#why-nixstorage-depends-on-nixiam-and-never-the-reverse) for why
   leaves specifically have none). `mode` — same 4-digit form as
   `ownership.<path>.mode`. Whether this pass may touch the leaf at all is
   controlled *entirely* by that identity's own `reconcile` flag — there is
@@ -531,8 +531,8 @@ above):
 - `verify.targets.<name>.image` — which `images.<name>` this device is
   expected to match (asserted to reference a declared image).
 
-`nixid.posix.identities.<name>` (a different repo, shipped in
-[nixid](https://github.com/julian-corbet/nixid-corbet-ch); the shape below
+`nixiam.posix.identities.<name>` (a different repo, shipped in
+[nixiam](https://github.com/julian-corbet/nixiam-corbet-ch); the shape below
 is `modules/reconciler.nix`'s own declared cross-repo contract, not this
 scaffold's invention):
 
@@ -542,7 +542,7 @@ scaffold's invention):
 - `variant` — `"native"` (runs directly as its own non-root uid) or
   `"puid"` (an s6-overlay/linuxserver.io-style image: starts root, drops
   privilege itself via `PUID`/`PGID`). Decides which half of
-  `nixid.posix.podSecurity.<name>` a leaf's invariant is checked against —
+  `nixiam.posix.podSecurity.<name>` a leaf's invariant is checked against —
   `.pod.runAsUser`/`.runAsGroup` for `"native"`, `.env.PUID`/`.PGID` (as
   strings) for `"puid"`.
 - `reconcile` (default `true`) — `false` marks an identity that is fully
@@ -553,11 +553,11 @@ scaffold's invention):
   normalization process is the canonical example. The same "declared, not
   converged" carve-out concept as `nixstorage.shape.datasets.<name>.class
   = null`, one layer over, on the RIGHTS side instead of SHAPE.
-- `nixid.posix.groups.<name> -> gid` — a plain shared-group table,
+- `nixiam.posix.groups.<name> -> gid` — a plain shared-group table,
   independent of any one identity; `nixstorage.reconciler.ownership.
   <path>.group` may reference either this table or an identity's own
   resolved gid.
-- `nixid.posix.podSecurity.<name>` — read-only, entirely derived from the
+- `nixiam.posix.podSecurity.<name>` — read-only, entirely derived from the
   matching `identities.<name>` entry; not something a consumer sets.
 
 ## Repository layout
@@ -623,10 +623,10 @@ header describes that convergence as "a reconciler consuming this data"'s
 job; whether that becomes a fifth piece of this repo or folds into
 `reconciler.nix` itself is genuinely open, not decided by this scaffold.
 
-The RIGHTS half of the design — `nixid.posix.identities.<name>` (uid/gid/
-variant/reconcile) plus its derived `nixid.posix.podSecurity.<name>`
+The RIGHTS half of the design — `nixiam.posix.identities.<name>` (uid/gid/
+variant/reconcile) plus its derived `nixiam.posix.podSecurity.<name>`
 twin — has since shipped in
-[nixid](https://github.com/julian-corbet/nixid-corbet-ch)
+[nixiam](https://github.com/julian-corbet/nixiam-corbet-ch)
 (`nixosModules.posix`), matching the cross-repo contract
 `modules/reconciler.nix` had already declared in its own header before
 that landed (not invented independently of it). `checks/` composes it for
@@ -640,14 +640,14 @@ of that contract.
 - [x] `nixosModules.disks` (`modules/disks.nix`) — the physical-disk table, read defensively by `nixluks`/`nixvault`
 - [x] `nixosModules.layout` (`modules/layout.nix` + `modules/layout-verify.sh` + `lib/image.nix` + `lib/partition-roles.nix`) — image build + read-only verify; never a block-device write, see [The safety model](#the-safety-model-nixstorage-never-touches-a-block-device) above
 - [ ] a reconciler for `nixstorage.shape`'s own `recordsize`/`compression` model
-- [x] `nixid.posix` (a different repo — the RIGHTS half of this same design) — shipped
+- [x] `nixiam.posix` (a different repo — the RIGHTS half of this same design) — shipped
 
 ## Related projects
 
 `nixstorage` is one of several small, independently-usable open-source
 projects sharing a common design system:
-[nixid](https://github.com/julian-corbet/nixid-corbet-ch) (the identity
-half of this exact split — RIGHTS, exposed as `nixid.posix.identities` and
+[nixiam](https://github.com/julian-corbet/nixiam-corbet-ch) (the identity
+half of this exact split — RIGHTS, exposed as `nixiam.posix.identities` and
 consumed here by name, never the reverse),
 [nixshare](https://github.com/julian-corbet/nixshare-corbet-ch)
 (actually mounts what a `delivery.nix` category with `mount = "nfs"`

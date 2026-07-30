@@ -28,7 +28,7 @@
 # mechanically proving the "pure table, no acting surface" claim two paragraphs up rather than
 # leaving it as prose. Deliberately NOT applied to `shape`/`delivery` (in scope, but not asked
 # for in this pass) or `reconciler` (a real systemd oneshot -- this check would be WRONG there).
-{ pkgs, lib, nixpkgs, system, nixid, shapeModule, deliveryModule, reconcilerModule, disksModule, layoutModule, scrubModule }:
+{ pkgs, lib, nixpkgs, system, nixiam, shapeModule, deliveryModule, reconcilerModule, disksModule, layoutModule, scrubModule }:
 
 let
   # Shared by every NixOS-eval fixture in this file, including `purity.nix`'s own bare/alone
@@ -41,10 +41,10 @@ let
   };
 
   # ── NixOS eval fixtures ──────────────────────────────────────────────────
-  # `evalShapeDeliveryReconciler`: shape+delivery+reconciler, WITHOUT nixid --
+  # `evalShapeDeliveryReconciler`: shape+delivery+reconciler, WITHOUT nixiam --
   # every fixture below leaves nixstorage.reconciler untouched (default
   # disabled, no ownership/leaves declared), which reconciler.nix's own
-  # header states is the one case that needs no nixid import at all.
+  # header states is the one case that needs no nixiam import at all.
   evalShapeDeliveryReconciler = extraConfig:
     (import (nixpkgs + "/nixos/lib/eval-config.nix") {
       inherit system;
@@ -233,10 +233,10 @@ let
 
   # ── the composed-host check: every real, implemented option, once ───────
   # Unchanged in spirit from this repo's original scaffold check -- still a
-  # `lib.nixosSystem` composing all four modules plus nixid's posix module
+  # `lib.nixosSystem` composing all four modules plus nixiam's posix module
   # against examples/host/configuration.nix, still discarding the drvPath's
   # string context so this evaluates a system rather than building one.
-  # nixid.nixosModules.posix is a real, shipped module as of this check
+  # nixiam.nixosModules.posix is a real, shipped module as of this check
   # (see README's Status) -- if that ever regresses, this is the one check
   # that will say so by refusing to evaluate.
   composedHost = lib.nixosSystem {
@@ -247,7 +247,7 @@ let
       reconcilerModule
       layoutModule
       scrubModule
-      nixid.nixosModules.posix
+      nixiam.nixosModules.posix
       ../examples/host/configuration.nix
     ];
   };

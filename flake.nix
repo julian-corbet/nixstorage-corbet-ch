@@ -1,26 +1,26 @@
 {
-  description = "Declarative storage, as ONE layer between hosts and the consumers of data: the physical disk table every other module reads by name, pre-pool media layout (a GPT partition table -- sizes, sector size, roles -- built as a pure derivation emitting a plain FILE, plus a read-only drift check against live media), ZFS dataset shape (recordsize/compression convergence), and category-based delivery (source -> $HOME -> XDG -> scope), reconciled by one idempotent pass. Ownership -- uid/gid and its Kubernetes securityContext twin -- is deliberately NOT here; a dataset names its owner by a string key into nixid instead.";
+  description = "Declarative storage, as ONE layer between hosts and the consumers of data: the physical disk table every other module reads by name, pre-pool media layout (a GPT partition table -- sizes, sector size, roles -- built as a pure derivation emitting a plain FILE, plus a read-only drift check against live media), ZFS dataset shape (recordsize/compression convergence), and category-based delivery (source -> $HOME -> XDG -> scope), reconciled by one idempotent pass. Ownership -- uid/gid and its Kubernetes securityContext twin -- is deliberately NOT here; a dataset names its owner by a string key into nixiam instead.";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
 
-    # nixstorage answers "where and what shape"; nixid answers "who". A
+    # nixstorage answers "where and what shape"; nixiam answers "who". A
     # root's owner/group may be a literal numeric uid/gid, but an app
     # leaf's identity is ALWAYS a STRING KEY into
-    # `nixid.posix.identities.<name>`, never a raw uid/gid copied into
+    # `nixiam.posix.identities.<name>`, never a raw uid/gid copied into
     # this repo -- so the on-disk owner and a workload's securityContext
     # can never independently drift (see README's "Why nixstorage depends
-    # on nixid, and never the reverse"). This dependency is permanently
-    # one-way: nixid must never learn a dataset name or a pool path. The
+    # on nixiam, and never the reverse"). This dependency is permanently
+    # one-way: nixiam must never learn a dataset name or a pool path. The
     # day it does, the layering this split exists to enforce has already
     # inverted.
-    nixid = {
-      url = "github:julian-corbet/nixid-corbet-ch";
+    nixiam = {
+      url = "github:julian-corbet/nixiam-corbet-ch";
       inputs.nixpkgs.follows = "nixpkgs";
     };
   };
 
-  outputs = { self, nixpkgs, nixid }:
+  outputs = { self, nixpkgs, nixiam }:
     let
       lib = nixpkgs.lib;
       supportedSystems = [ "x86_64-linux" "aarch64-linux" ];
@@ -132,7 +132,7 @@
       #   }
       lib.buildLayoutImage = { pkgs }: import ./lib/image.nix { inherit pkgs; };
 
-      # All six of this repo's modules, PLUS nixid's posix identity
+      # All six of this repo's modules, PLUS nixiam's posix identity
       # module -- the one thing nixstorage can name an owner/identity
       # reference to but must never define itself -- composed into one
       # system from examples/host, PLUS a handful of standalone eval-tests
@@ -141,18 +141,22 @@
       # detecting drift). See checks/default.nix for all of it, the same
       # split nixfs/nixvault/nixboot already use in this family.
       #
-      # ⚠ At the time this scaffold was written, nixid's own posix/identity
-      # module (`nixid.posix.identities`/`.groups`/`.podSecurity` --
-      # `modules/reconciler.nix`'s own declared cross-repo contract, see
-      # that file's header) had not been published in
-      # https://github.com/julian-corbet/nixid-corbet-ch yet. The composed-
-      # host check is written against that contract, not against code that
-      # has run from the nixid side -- it will not evaluate until it
-      # lands. See README's Status section.
+      # ⚠ nixiam's own posix/identity module (`nixiam.posix.identities`/
+      # `.groups`/`.podSecurity` -- `modules/reconciler.nix`'s own declared
+      # cross-repo contract, see that file's header) is real and shipped --
+      # this repo's own read path was repointed at it (from an intervening
+      # standalone nixposix repo, itself moved out of and back into nixid,
+      # since renamed nixiam) precisely because nixiam.posix was found NOT
+      # actually declared under the OLD path this file's own `nixid` input
+      # once pointed at, silently resolving `identities`/`groups` to the
+      # empty set. See README's "Why nixstorage depends on nixiam" and
+      # Status section. The one thing genuinely still pending is
+      # publication: `github:julian-corbet/nixiam-corbet-ch` above has no
+      # public remote yet, so this input does not resolve until it does.
       checks = forAllSystems (system:
         import ./checks {
           pkgs = pkgsFor system;
-          inherit lib nixpkgs system nixid;
+          inherit lib nixpkgs system nixiam;
           shapeModule = self.nixosModules.shape;
           deliveryModule = self.nixosModules.delivery;
           reconcilerModule = self.nixosModules.reconciler;

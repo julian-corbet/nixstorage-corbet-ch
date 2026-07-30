@@ -262,7 +262,7 @@ let
   verifyTargetNames = attrNames cfg.verify.targets;
 
   # `config.nixstorage.disks`, not imported: `nixstorage.disks` (modules/
-  # disks.nix) lives in THIS repo, so unlike the nixid cross-repo contract
+  # disks.nix) lives in THIS repo, so unlike the nixiam cross-repo contract
   # reconciler.nix reads (see that file's own header), there is no reason
   # to go through a separate module boundary to reach it. Still read as
   # `or { }`, not assumed present, because `nixosModules.layout` is

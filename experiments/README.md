@@ -24,7 +24,7 @@ worth closing with something stronger than a documentation caveat — for
 instance, a runtime check (a boot-time oneshot that walks `stat()` up from
 each `subtreeMountable` dataset to the pool root and warns on the first
 non-traversable directory it finds, the same "advisory, never fatal"
-pattern nixid's own `exposeOnInterfaces` check uses)?
+pattern nixiam's own `exposeOnInterfaces` check uses)?
 
 **Hypothesis:** probably yes, eventually — the failure mode (an
 undeclared grandparent silently breaking the traversal guarantee) is

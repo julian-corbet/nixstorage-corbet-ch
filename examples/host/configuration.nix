@@ -1,5 +1,5 @@
 # The smallest NixOS configuration that composes nixstorage's own four
-# implemented modules together with nixid's posix identity module, used by the
+# implemented modules together with nixiam's posix identity module, used by the
 # `modules-evaluate` check.
 #
 # This is not a machine anyone would run: the pool is called "tank", the
@@ -16,13 +16,13 @@
 # carve-out, and layout's own "only the last partition may consume the
 # remainder" rule.
 #
-# `nixid.posix.*` below is VERIFIED against the shipped module, not
-# anticipated: this example composes with nixid's posix module through
+# `nixiam.posix.*` below is VERIFIED against the shipped module, not
+# anticipated: this example composes with nixiam's posix module through
 # `lib.nixosSystem`, `system.build.toplevel` resolves, and every assertion
 # the composed config produces evaluates true. The contract
-# `modules/reconciler.nix` depends on -- `nixid.posix.identities.<name> =
+# `modules/reconciler.nix` depends on -- `nixiam.posix.identities.<name> =
 # { uid; gid; variant; reconcile; }` plus the derived, read-only
-# `nixid.posix.podSecurity.<name>` -- matches what nixid actually declares,
+# `nixiam.posix.podSecurity.<name>` -- matches what nixiam actually declares,
 # including the native-vs-puid branch.
 { ... }:
 {
@@ -131,7 +131,7 @@
     # for this -- NOT omitting the dataset from the map entirely, which
     # would make it invisible to every OTHER dataset's ancestor-chain /
     # prune checks. Its RIGHTS-side counterpart is
-    # `nixid.posix.identities.example-db.reconcile = false` below --
+    # `nixiam.posix.identities.example-db.reconcile = false` below --
     # deliberately the same carve-out concept, one layer over.
     "tank/apps/dbs" = {
       class = null;
@@ -192,9 +192,9 @@
 
   # ── RECONCILER: ownership + top-directory mode -------------------------
   # `owner`/`group` (roots) and `identity` (leaves) are all NAME
-  # references resolved against `nixid.posix.identities`/`.groups` below,
+  # references resolved against `nixiam.posix.identities`/`.groups` below,
   # never a raw uid/gid restated here -- see this repo's README, "Why
-  # nixstorage depends on nixid, and never the reverse".
+  # nixstorage depends on nixiam, and never the reverse".
   nixstorage.reconciler = {
     enable = true;
     onCalendar = "hourly";
@@ -242,7 +242,7 @@
       # The reconcile = false carve-out itself: declared so this identity
       # is visible end to end (a real uid, a real mode, checked by every
       # structural assertion), but never chowned or chmodded, because
-      # `nixid.posix.identities.example-db.reconcile = false` below is the
+      # `nixiam.posix.identities.example-db.reconcile = false` below is the
       # identity's OWN opinion that an external database-normalization
       # process already owns its lifecycle -- there is no separate
       # per-leaf override for this; the identity's flag is the only one
@@ -251,19 +251,19 @@
     };
   };
 
-  # nixid's posix registry must be ENABLED, not merely populated. Its
+  # nixiam's posix registry must be ENABLED, not merely populated. Its
   # assertions -- uid/gid collision detection, and the non-empty `domain`
   # check -- all sit behind `mkIf cfg.enable`, so an example that declares
   # identities without enabling the module gets the data and none of the
   # safety, which is precisely the wrong thing for an example to teach.
-  nixid.posix.enable = true;
+  nixiam.posix.enable = true;
 
   # The identity domain, shared by everything that maps names across a
   # boundary. Its first consumer is NFSv4 idmapd's `Domain=`: a client
   # whose domain does not match the server's falls back to its DNS domain,
   # and every ACL-touching syscall then pays a failed kernel upcall while
   # plain ownership keeps working -- which is exactly why it goes unnoticed.
-  nixid.posix.domain = "example.org";
+  nixiam.posix.domain = "example.org";
 
   # ── LAYOUT: how media is CARVED -- partition tables, sizes, roles ------
   # A single small image with all three sanctioned roles: an ESP (the
@@ -339,7 +339,7 @@
     };
   };
 
-  nixid.posix.identities = {
+  nixiam.posix.identities = {
     # Referenced only as a ROOT owner/group above (no leaf uses it) --
     # `gid` is left unset, defaulting to a User Private Group (== uid).
     shared-media = { uid = 3000; variant = "native"; reconcile = true; };

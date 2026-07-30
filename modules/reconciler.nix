@@ -22,22 +22,22 @@
 # assertions that make a bad declaration fail loudly instead of quietly
 # reconciling the wrong thing.
 #
-# ── Cross-repo contract: nixstorage CONSUMES nixid, never the reverse ────
+# ── Cross-repo contract: nixstorage CONSUMES nixiam, never the reverse ────
 # `ownership.<path>.owner`/`.group` and `leaves.<path>.identity` are NAMES
-# resolved against `config.nixid.posix.identities.<name> = { uid; gid; ...
-# }` and, for `group` only, optionally also `config.nixid.posix.groups.
+# resolved against `config.nixiam.posix.identities.<name> = { uid; gid; ...
+# }` and, for `group` only, optionally also `config.nixiam.posix.groups.
 # <name> -> gid` (a plain shared-group table, independent of any one app
-# identity). `config.nixid.posix.podSecurity.<name>` is nixid's own
+# identity). `config.nixiam.posix.podSecurity.<name>` is nixiam's own
 # Kubernetes-securityContext-shaped twin of the SAME identity -- see the
 # per-leaf assertions below for what cross-checking it actually buys you.
-# All three option paths are read defensively (`config.nixid.posix.… or
-# {}`), so importing this module WITHOUT nixid's posix module works fine
+# All three option paths are read defensively (`config.nixiam.posix.… or
+# {}`), so importing this module WITHOUT nixiam's posix module works fine
 # as long as `ownership.*.owner`/`.group` are given as literal numeric
 # uid/gid strings and no `leaves` are declared at all -- the moment a
 # `leaves` entry is declared, its `identity` MUST resolve, and that
 # failure is reported as a real assertion, not a cryptic missing-attribute
 # trace. Dependency direction is enforced by convention, not by any
-# mechanism in this file: nixid must never gain any notion of a dataset, a
+# mechanism in this file: nixiam must never gain any notion of a dataset, a
 # path, or a pool. If that boundary is ever crossed in either direction,
 # the entire reason these are two separate repos is gone.
 #
@@ -64,13 +64,13 @@ with lib;
 let
   cfg = config.nixstorage.reconciler;
 
-  # ── nixid.posix: read defensively, see header for why ───────────────
-  posixDeclared = options ? nixid && (options.nixid ? posix) && (options.nixid.posix ? identities);
-  identities = config.nixid.posix.identities or { };
-  groups = config.nixid.posix.groups or { };
-  podSecurity = config.nixid.posix.podSecurity or { };
+  # ── nixiam.posix: read defensively, see header for why ───────────────
+  posixDeclared = options ? nixiam && (options.nixiam ? posix) && (options.nixiam.posix ? identities);
+  identities = config.nixiam.posix.identities or { };
+  groups = config.nixiam.posix.groups or { };
+  podSecurity = config.nixiam.posix.podSecurity or { };
 
-  # Mirrors nixid.posix's own private `resolvedGid` (modules/posix.nix):
+  # Mirrors nixiam.posix's own private `resolvedGid` (modules/posix.nix):
   # an unset `gid` is a User Private Group, numerically equal to `uid`.
   # Duplicated here rather than imported because it's three lines of pure
   # arithmetic on a value this module already has in hand -- not worth a
@@ -84,8 +84,8 @@ let
 
   notImportedHint = ''
 
-    nixid's posix module does not appear to be imported into this
-    configuration at all (checked via `options.nixid.posix.identities`).
+    nixiam's posix module does not appear to be imported into this
+    configuration at all (checked via `options.nixiam.posix.identities`).
     Either import it alongside nixstorage, or use a literal numeric
     uid/gid string here instead of a name.'';
 
@@ -94,7 +94,7 @@ let
     else if identities ? ${spec.owner} then identities.${spec.owner}.uid
     else throw ''
       nixstorage.reconciler.ownership."${path}".owner = "${spec.owner}" is
-      neither a literal numeric uid nor a name in nixid.posix.identities.
+      neither a literal numeric uid nor a name in nixiam.posix.identities.
       Declared identities: ${availableIdentities}.${optionalString (!posixDeclared) notImportedHint}
     '';
 
@@ -113,9 +113,9 @@ let
     if isNumericStr spec.group then lib.toInt spec.group
     else if ambiguousGroup spec.group then throw ''
       nixstorage.reconciler.ownership."${path}".group = "${spec.group}" is
-      ambiguous: it names BOTH nixid.posix.groups."${spec.group}"
+      ambiguous: it names BOTH nixiam.posix.groups."${spec.group}"
       (gid ${toString (groups.${spec.group} or 0)}) AND
-      nixid.posix.identities."${spec.group}"
+      nixiam.posix.identities."${spec.group}"
       (resolved gid ${toString (identGid (identities.${spec.group} or { uid = 0; gid = null; }))}),
       and the two disagree.
 
@@ -127,8 +127,8 @@ let
     else if identities ? ${spec.group} then identGid identities.${spec.group}
     else throw ''
       nixstorage.reconciler.ownership."${path}".group = "${spec.group}" is
-      neither a literal numeric gid, a name in nixid.posix.groups, nor a
-      name in nixid.posix.identities (an identity's own resolved gid).
+      neither a literal numeric gid, a name in nixiam.posix.groups, nor a
+      name in nixiam.posix.identities (an identity's own resolved gid).
       Declared identities: ${availableIdentities}.${optionalString (!posixDeclared) notImportedHint}
     '';
 
@@ -136,7 +136,7 @@ let
     if identities ? ${spec.identity} then identities.${spec.identity}.uid
     else throw ''
       nixstorage.reconciler.leaves."${path}".identity = "${spec.identity}"
-      was not found in nixid.posix.identities. A leaf's uid/gid are ALWAYS
+      was not found in nixiam.posix.identities. A leaf's uid/gid are ALWAYS
       looked up from the identity registry, never restated here -- that is
       what makes the on-disk-uid vs k8s-runAsUser/PUID invariant checkable
       at all (see this module's own per-leaf assertions).
@@ -145,7 +145,7 @@ let
 
   resolveLeafGid = path: spec:
     if identities ? ${spec.identity} then identGid identities.${spec.identity}
-    else throw "nixstorage.reconciler.leaves.\"${path}\".identity = \"${spec.identity}\" not found in nixid.posix.identities (see the uid resolution error above for the full message).";
+    else throw "nixstorage.reconciler.leaves.\"${path}\".identity = \"${spec.identity}\" not found in nixiam.posix.identities (see the uid resolution error above for the full message).";
 
   # `reconcile=false` is ONE honest concept, generalizing what used to be
   # several separately-named per-leaf carve-out flags (a database owning
@@ -155,10 +155,10 @@ let
   # locally (`ownership.<path>.reconcile`) because a root's owner can be a
   # bare literal uid with no identity behind it at all. For a LEAF, the
   # flag is never restated here: it is read straight from
-  # `nixid.posix.identities.<name>.reconcile` -- the identity's OWN
+  # `nixiam.posix.identities.<name>.reconcile` -- the identity's OWN
   # opinion on whether anything is allowed to touch its data's ownership,
   # which is the one and only place that opinion should live (see that
-  # option's own description in nixid for the two real shapes this
+  # option's own description in nixiam for the two real shapes this
   # covers). A root whose `owner` happens to BE an identity name is
   # additionally gated by that identity's own flag too, on top of its
   # local one -- the more restrictive of the two always wins.
@@ -283,7 +283,7 @@ let
           message = ''
             nixstorage.reconciler.ownership."${path}".owner = "${spec.owner}"
             is neither a literal numeric uid nor a name in
-            nixid.posix.identities. Declared identities: ${availableIdentities}.${optionalString (!posixDeclared) notImportedHint}
+            nixiam.posix.identities. Declared identities: ${availableIdentities}.${optionalString (!posixDeclared) notImportedHint}
           '';
         })
       (attrNames cfg.ownership))
@@ -294,8 +294,8 @@ let
           assertion = false;
           message = ''
             nixstorage.reconciler.ownership."${path}".group = "${spec.group}"
-            is neither a literal numeric gid, a name in nixid.posix.groups,
-            nor a name in nixid.posix.identities. Declared identities:
+            is neither a literal numeric gid, a name in nixiam.posix.groups,
+            nor a name in nixiam.posix.identities. Declared identities:
             ${availableIdentities}.${optionalString (!posixDeclared) notImportedHint}
           '';
         })
@@ -307,7 +307,7 @@ let
           assertion = false;
           message = ''
             nixstorage.reconciler.leaves."${path}".identity = "${spec.identity}"
-            was not found in nixid.posix.identities. Declared identities:
+            was not found in nixiam.posix.identities. Declared identities:
             ${availableIdentities}.${optionalString (!posixDeclared) notImportedHint}
           '';
         })
@@ -316,20 +316,20 @@ let
   # THE invariant this module exists to make machine-checkable rather than
   # a comment: a leaf's on-disk uid/gid (what this reconciler actually
   # chowns it to) must equal the runAsUser/runAsGroup (native identities)
-  # or PUID/PGID (puid identities) that nixid generated for the SAME
+  # or PUID/PGID (puid identities) that nixiam generated for the SAME
   # identity's Kubernetes securityContext. Get this wrong and a pod starts
   # as a uid that cannot open its own already-chowned data -- EACCES on
   # every read/write, discovered only once the container actually runs,
   # nowhere near build/deploy time. Both values are, today, pure functions
-  # of the exact same `nixid.posix.identities.<name>` entry
-  # (`nixid.posix.podSecurity` is `readOnly = true` and entirely derived --
+  # of the exact same `nixiam.posix.identities.<name>` entry
+  # (`nixiam.posix.podSecurity` is `readOnly = true` and entirely derived --
   # see that option's own description), so this assertion is structurally
-  # guaranteed to hold as long as this module and nixid's posix module
+  # guaranteed to hold as long as this module and nixiam's posix module
   # both resolve a leaf through `identity` the way they're documented to.
   # It stays here anyway, as a real assertion rather than a comment
   # claiming the guarantee, because a guarantee that is never actually
   # checked is indistinguishable from one that silently stopped holding --
-  # this is the trip-wire for the day nixid's own derivation, or this
+  # this is the trip-wire for the day nixiam's own derivation, or this
   # module's own resolution path, changes underneath that guarantee.
   leafInvariantAssertions = flatten (map
     (path:
@@ -349,9 +349,9 @@ let
             message = ''
               nixstorage.reconciler.leaves."${path}" uses identity "${n}"
               (variant "native"): its on-disk uid
-              (nixid.posix.identities.${n}.uid = ${toString ident.uid}, what
+              (nixiam.posix.identities.${n}.uid = ${toString ident.uid}, what
               this leaf is actually chowned to) does not match
-              nixid.posix.podSecurity.${n}.pod.runAsUser
+              nixiam.posix.podSecurity.${n}.pod.runAsUser
               (${toString ps.pod.runAsUser}). This should be structurally
               impossible -- both are derived from the same identity entry --
               so if this fires, whatever broke that derivation is the real
@@ -363,7 +363,7 @@ let
             message = ''
               nixstorage.reconciler.leaves."${path}" uses identity "${n}":
               its on-disk gid (${toString gid}) does not match
-              nixid.posix.podSecurity.${n}.pod.runAsGroup
+              nixiam.posix.podSecurity.${n}.pod.runAsGroup
               (${toString ps.pod.runAsGroup}). Same failure class as the
               runAsUser check above, one field over.
             '';
@@ -376,7 +376,7 @@ let
               (variant "puid" -- an s6-overlay/linuxserver.io-style image:
               starts as root, drops privilege itself via PUID/PGID). Its
               on-disk uid (${toString ident.uid}) does not match
-              nixid.posix.podSecurity.${n}.env.PUID (${ps.env.PUID}). If
+              nixiam.posix.podSecurity.${n}.env.PUID (${ps.env.PUID}). If
               this ever drifts, the container's own entrypoint chowns its
               data to a DIFFERENT uid than this reconciler applies, and the
               two fight each other's ownership forever, once per restart
@@ -388,7 +388,7 @@ let
             message = ''
               nixstorage.reconciler.leaves."${path}" uses identity "${n}":
               its on-disk gid (${toString gid}) does not match
-              nixid.posix.podSecurity.${n}.env.PGID (${ps.env.PGID}).
+              nixiam.posix.podSecurity.${n}.env.PGID (${ps.env.PGID}).
             '';
           }
         ]
@@ -535,7 +535,7 @@ in
         (see `leaves` below for why the order is load-bearing, not
         arbitrary). `owner`/`group` may each independently be a literal
         numeric uid/gid string, OR a name resolved against
-        `nixid.posix.identities`/`nixid.posix.groups` -- see those two
+        `nixiam.posix.identities`/`nixiam.posix.groups` -- see those two
         options' own descriptions for exactly how each is looked up
         (checked by assertion, not left to fail as a raw missing-attribute
         trace).
@@ -547,7 +547,7 @@ in
             example = "3000";
             description = ''
               A literal numeric uid (as a string, e.g. `"3000"`), or a name
-              found in `nixid.posix.identities.<name>.uid`. No default --
+              found in `nixiam.posix.identities.<name>.uid`. No default --
               every declared root needs an explicit, deliberate owner;
               silently defaulting one is exactly how a fresh tree ends up
               owned by whatever happened to be running when it was first
@@ -560,9 +560,9 @@ in
             example = "3000";
             description = ''
               A literal numeric gid (as a string), a name found in
-              `nixid.posix.groups.<name>` (a shared group, independent of
+              `nixiam.posix.groups.<name>` (a shared group, independent of
               any one identity), or a name found in
-              `nixid.posix.identities.<name>` (that identity's own resolved
+              `nixiam.posix.identities.<name>` (that identity's own resolved
               gid -- a User Private Group unless it overrides `gid`). No
               default, same reasoning as `owner`.
             '';
@@ -630,7 +630,7 @@ in
               legitimately owns it.
 
               If `owner` names an identity, that identity's own
-              `nixid.posix.identities.<name>.reconcile` flag is ALSO
+              `nixiam.posix.identities.<name>.reconcile` flag is ALSO
               consulted, and the more restrictive of the two always wins --
               you cannot force-enable reconciliation here against an
               identity that has declared itself off limits.
@@ -665,7 +665,7 @@ in
             type = types.str;
             example = "myapp";
             description = ''
-              Name in `nixid.posix.identities`. This leaf's on-disk uid/gid
+              Name in `nixiam.posix.identities`. This leaf's on-disk uid/gid
               ARE that identity's `uid`/resolved `gid`, full stop -- see
               this option group's own header for why there is no
               literal-number escape hatch here (there is one on
@@ -676,9 +676,9 @@ in
 
               Whether this pass is actually allowed to touch this leaf's
               ownership is controlled entirely by
-              `nixid.posix.identities.<name>.reconcile` -- there is no
+              `nixiam.posix.identities.<name>.reconcile` -- there is no
               separate per-leaf override; see that option's own
-              description in nixid for the two real shapes it covers.
+              description in nixiam for the two real shapes it covers.
             '';
           };
 

@@ -12,12 +12,12 @@
 # precisely the failure where a layout run and an unlock run disagree about which disk is
 # which. This repo's own README already warns about exactly this anti-pattern ("two numbers
 # someone has to remember to keep in sync by hand") -- for uid/gid, where it delegates to
-# nixid's table. The same discipline, applied to device paths, is this file.
+# nixiam's table. The same discipline, applied to device paths, is this file.
 #
 # IT IS A TABLE, NOT A MECHANISM. Nothing here partitions, formats, mounts, opens, or
 # touches a device in any way. It declares that a name means a path, and refuses paths that
 # cannot survive a reboot. Consumers read it defensively (`config.nixstorage.disks or { }`)
-# exactly as this repo reads `config.nixid.posix.identities or { }`, so a module that reads
+# exactly as this repo reads `config.nixiam.posix.identities or { }`, so a module that reads
 # it keeps working on a host that has never imported this one.
 #
 # WHY IN nixstorage AND NOT A REGISTRY. A host's disks ARE its mass storage, and this repo
