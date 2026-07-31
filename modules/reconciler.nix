@@ -8,19 +8,13 @@
 # (source -> $HOME -> XDG -> scope), this file converges WHO owns it and
 # HOW FAR it can be walked into.
 #
-# Extracted, with its exact semantics preserved on purpose, from a real,
-# already-running private reconciler that has been chowning/chmodding a
-# multi-pool, multi-hundred-terabyte deployment on an unattended schedule for
-# months. The actual chown/chmod rules this buys you -- recursive chown vs
-# top-dir-only chmod, mis-owned-only, never dereferencing a symlink, roots
-# before leaves, shallow leaves before deep ones, prune honoured on every
-# walk -- live in reconcile.sh, one rule per function, each with its own
-# "why" comment; every one of them reads as counter-intuitive on first
-# sight, and every one is there because someone tried the obvious
-# alternative first, on real data, and it broke something real. This file
-# is the Nix half: the schema, the cross-module wiring, and the
-# assertions that make a bad declaration fail loudly instead of quietly
-# reconciling the wrong thing.
+# The actual chown/chmod rules -- recursive chown vs top-dir-only chmod, mis-owned-only, never
+# dereferencing a symlink, roots before leaves, shallow leaves before deep ones, prune honoured on
+# every walk -- live in reconcile.sh, one rule per function, each with its own "why" comment: every
+# one reads as counter-intuitive on first sight, and every one exists because the obvious
+# alternative broke something real on a live, multi-pool, multi-hundred-terabyte deployment. This
+# file is the Nix half: the schema, the cross-module wiring, and the assertions that make a bad
+# declaration fail loudly instead of quietly reconciling the wrong thing.
 #
 # ── Cross-repo contract: nixstorage CONSUMES nixiam, never the reverse ────
 # `ownership.<path>.owner`/`.group` and `leaves.<path>.identity` are NAMES
@@ -42,11 +36,9 @@
 # the entire reason these are two separate repos is gone.
 #
 # ── Why a standalone reconcile.sh, wrapped, not pkgs.writeShellApplication ──
-# reconcile.sh is deliberately readable as one plain script -- open it,
-# diff it, `bash -n` it, in one sitting -- the same choice this family's
-# private ancestor made, for the same reason: this is the one file in
-# nixstorage where "can a human read every chown/chmod call this thing can
-# possibly make" matters more than everything else being Nix-native.
+# reconcile.sh is deliberately readable as one plain script -- open it, diff it, `bash -n` it, in
+# one sitting: this is the one file in nixstorage where "can a human read every chown/chmod call
+# this thing can possibly make" matters more than everything else being Nix-native.
 #
 # It is wrapped with `pkgs.writeShellScriptBin`, deliberately NOT
 # `pkgs.writeShellApplication`: that helper hard-codes `set -euo pipefail`
@@ -77,20 +69,20 @@ let
   # for the composed-but-broken case.
   identitiesProbe = probeFact {
     inherit config;
-    namespace = "nixiam";
-    path = "posix.identities";
+    namespace = "nixiam.posix";
+    path = "identities";
     fallback = { };
   };
   groupsProbe = probeFact {
     inherit config;
-    namespace = "nixiam";
-    path = "posix.groups";
+    namespace = "nixiam.posix";
+    path = "allGroups";
     fallback = { };
   };
   podSecurityProbe = probeFact {
     inherit config;
-    namespace = "nixiam";
-    path = "posix.podSecurity";
+    namespace = "nixiam.posix";
+    path = "podSecurity";
     fallback = { };
   };
 
@@ -184,11 +176,10 @@ let
     if identities ? ${spec.identity} then identGid identities.${spec.identity}
     else throw "nixstorage.reconciler.leaves.\"${path}\".identity = \"${spec.identity}\" not found in nixiam.posix.identities (see the uid resolution error above for the full message).";
 
-  # `reconcile=false` is ONE honest concept, generalizing what used to be
-  # several separately-named per-leaf carve-out flags (a database owning
-  # its own data directory's lifecycle, a path genuinely owned by a
-  # different system entirely): "declared, visible, asserted against --
-  # but this pass must never chown/chmod it." For a root, that flag lives
+  # `reconcile=false` is ONE honest concept covering every carve-out case (a database owning its
+  # own data directory's lifecycle, a path genuinely owned by a different system entirely):
+  # "declared, visible, asserted against -- but this pass must never chown/chmod it." For a root,
+  # that flag lives
   # locally (`ownership.<path>.reconcile`) because a root's owner can be a
   # bare literal uid with no identity behind it at all. For a LEAF, the
   # flag is never restated here: it is read straight from
