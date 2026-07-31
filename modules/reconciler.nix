@@ -57,6 +57,7 @@
 # abort convergence for every OTHER declared root/leaf still queued behind
 # it in the same invocation. See reconcile.sh's own header for the same
 # note from the script's side of this boundary.
+{ probeFact, collectProbes }:
 { lib, config, pkgs, options, ... }:
 
 with lib;
@@ -64,11 +65,44 @@ with lib;
 let
   cfg = config.nixstorage.reconciler;
 
-  # ── nixiam.posix: read defensively, see header for why ───────────────
-  posixDeclared = options ? nixiam && (options.nixiam ? posix) && (options.nixiam.posix ? identities);
-  identities = config.nixiam.posix.identities or { };
-  groups = config.nixiam.posix.groups or { };
-  podSecurity = config.nixiam.posix.podSecurity or { };
+  # ── nixiam.posix: read through `lib.probeFact` (github:julian-corbet/nixhost-corbet-ch,
+  # `lib/facts.nix`), see header for why. A bare `config.nixiam.posix.… or { }` cannot tell "nixiam
+  # not composed here" from "nixiam composed but `identities`/`groups`/`podSecurity` moved, was
+  # renamed, or was rejected by its own type" -- both silently fall back to `{ }` with a bare `or`,
+  # and the second one is a real defect (this exact shape is what cost `nixstorage.layout` real
+  # weeks elsewhere in this family -- see nixhost's own `lib/facts.nix` header). `probeFact` tells
+  # the two apart: `identities`/`groups`/`podSecurity` below still resolve to `{ }` either way (so
+  # every throw-based assertion downstream that already depends on them keeps behaving exactly as
+  # before), but each probe's own `.warnings` (spliced into `config.warnings` below) renders ONLY
+  # for the composed-but-broken case.
+  identitiesProbe = probeFact {
+    inherit config;
+    namespace = "nixiam";
+    path = "posix.identities";
+    fallback = { };
+  };
+  groupsProbe = probeFact {
+    inherit config;
+    namespace = "nixiam";
+    path = "posix.groups";
+    fallback = { };
+  };
+  podSecurityProbe = probeFact {
+    inherit config;
+    namespace = "nixiam";
+    path = "posix.podSecurity";
+    fallback = { };
+  };
+
+  # `posixDeclared` now answers "did `nixiam.posix.identities` actually resolve", collapsing
+  # `probeFact`'s finer "absent" vs. "unresolved" split back to the one boolean the throw messages
+  # below need -- both cases mean the same thing for THEM: there is no identity table here to
+  # look a name up in, whatever the reason. The two states remain separately visible via
+  # `identitiesProbe.warnings` for the one case (composed-but-broken) that is actually a defect.
+  posixDeclared = identitiesProbe.state == "resolved";
+  identities = identitiesProbe.value;
+  groups = groupsProbe.value;
+  podSecurity = podSecurityProbe.value;
 
   # Mirrors nixiam.posix's own private `resolvedGid` (modules/posix.nix):
   # an unset `gid` is a User Private Group, numerically equal to `uid`.
@@ -84,10 +118,13 @@ let
 
   notImportedHint = ''
 
-    nixiam's posix module does not appear to be imported into this
-    configuration at all (checked via `options.nixiam.posix.identities`).
-    Either import it alongside nixstorage, or use a literal numeric
-    uid/gid string here instead of a name.'';
+    nixiam.posix.identities is not available in this configuration --
+    either nixiam's posix module was never imported here at all, or it was
+    but `identities` did not resolve (see any "did not resolve" warning
+    this build produced, above, for which -- that is the one that means the
+    option moved or was renamed, not simply "never imported"). Either
+    import/fix it, or use a literal numeric uid/gid string here instead of
+    a name.'';
 
   resolveOwnerUid = path: spec:
     if isNumericStr spec.owner then lib.toInt spec.owner
@@ -771,6 +808,10 @@ in
         ++ ancestorTraversalAssertions
         ++ duplicatePathAssertions
         ++ pruneOverlapAssertions;
+
+      # Same unconditional posture as `assertions` above, same reason: nixiam.posix state (c) is
+      # exactly as real a defect whether or not the reconcile timer is currently enabled.
+      warnings = (collectProbes [ identitiesProbe groupsProbe podSecurityProbe ]).warnings;
     }
     (mkIf cfg.enable {
       environment.etc."nixstorage/reconcile.json".source = configFile;

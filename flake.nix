@@ -33,9 +33,28 @@
       url = "github:julian-corbet/nixtest-corbet-ch";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+
+    # A third category again, distinct from both of the above: nixhost is a lib-only dependency
+    # like nixtest (no NixOS module of ITS shape composed here either), but unlike nixtest it IS
+    # reached from a real exported module, not only from `checks`. `reconciler.nix`'s own
+    # `config.nixiam.posix.identities`/`.groups`/`.podSecurity` reads are exactly the cross-
+    # namespace defensive-read defect class nixhost's `lib.probeFact`/`lib.collectProbes`
+    # (`lib/facts.nix`) exists to fix -- a bare `config.nixfoo.bar or fallback` cannot tell
+    # "nixfoo not composed here" from "nixfoo composed but `bar` moved/renamed/rejected", and the
+    # second one is a real defect this exact shape already cost this family real weeks over
+    # (`nixstorage.layout`, this repo's own README/Status records it). `probeFact`/`collectProbes`
+    # are closed over as plain function arguments when `reconciler.nix` is exported below, never
+    # `_module.args` -- the same partially-applied-before-the-module-system-sees-it pattern this
+    # family already uses for `nixfsCatalogue` (see infra's own flake.nix comment on `mkNixnas` for
+    # that precedent) -- so a consumer importing `nixosModules.reconciler` sees an ordinary module
+    # function and never needs to know `probeFact` exists.
+    nixhost = {
+      url = "github:julian-corbet/nixhost-corbet-ch";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
-  outputs = { self, nixpkgs, nixiam, nixtest }:
+  outputs = { self, nixpkgs, nixiam, nixtest, nixhost }:
     let
       lib = nixpkgs.lib;
       supportedSystems = [ "x86_64-linux" "aarch64-linux" ];
@@ -78,7 +97,11 @@
       # ---------------------------------------------------------------
       nixosModules.shape = ./modules/shape.nix;
       nixosModules.delivery = ./modules/delivery.nix;
-      nixosModules.reconciler = ./modules/reconciler.nix;
+      # `probeFact`/`collectProbes` closed over here, before the module system ever sees the
+      # result -- see the nixhost input comment above. The exported value is a plain module
+      # function taking the usual `{ lib, config, pkgs, options, ... }`; nothing about consuming
+      # it changes.
+      nixosModules.reconciler = import ./modules/reconciler.nix { inherit (nixhost.lib) probeFact collectProbes; };
       nixosModules.disks = ./modules/disks.nix;
       nixosModules.layout = ./modules/layout.nix;
       # nixstorage.scrub -- idle-/RAM-/temperature-gated btrfs/xfs/zfs scrub
@@ -117,7 +140,9 @@
       # nothing more than rereading this file end to end.
       systemManagerModules.shape = ./modules/shape.nix;
       systemManagerModules.delivery = ./modules/delivery.nix;
-      systemManagerModules.reconciler = ./modules/reconciler.nix;
+      # Same closed-over `probeFact`/`collectProbes` as nixosModules.reconciler above -- one
+      # `import`, reused on both backends (the module body itself is backend-agnostic).
+      systemManagerModules.reconciler = self.nixosModules.reconciler;
       systemManagerModules.disks = ./modules/disks.nix;
       systemManagerModules.layout = ./modules/layout.nix;
       systemManagerModules.default = {
