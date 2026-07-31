@@ -10,55 +10,31 @@
 # explicitly gated operation"; this file is that operation, one layer
 # further down, at the media level rather than the ZFS-pool level.
 #
-# THIS FILE SPENT A WHILE IN A REPO OF ITS OWN, AND THAT SPLIT HAS BEEN
-# REVERSED. An audit once counted FOUR kinds of fact in this flake --
-# shape (ZFS properties on an EXISTING dataset), delivery (XDG/$HOME
-# surfacing), reconciler (uid/gid + mode), and this one, layout (GPT
-# geometry, sector size, raw device images) -- and extracted layout into a
-# standalone `nixlayout` repo, on the grounds that the other three
-# presuppose a pool that already exists while this file runs BEFORE any
-# pool does: an image built here is what eventually gets `dd`'d onto a
-# disk ZFS has never heard of yet. That reading is accurate, and the split
-# was still wrong, because PRE-POOL vs POST-POOL is a ZFS-SHAPED boundary
-# -- a real line, drawn in a place only ZFS has. Under LVM there is no
-# pool for a partition table to precede: a PV is carved, grouped into a
-# VG, and carved again into LVs, and "before the pool exists" names no
-# single point in that lifecycle. The same holds for every other storage
-# architecture a PUBLIC module family cannot enumerate in advance -- a
-# hardware RAID controller presenting one opaque LUN, plain partitions
-# with plain filesystems, btrfs's own multi-device volumes, bcachefs, an
-# iSCSI target somebody else already carved before this host ever saw it.
-# A repo boundary drawn from ONE implementation's lifecycle stages bakes
-# that implementation into the option namespace, which is exactly what a
-# namespace this generic must not do.
+# `layout` lives in this same repo, not a standalone one, because PRE-POOL vs POST-POOL is a
+# ZFS-SHAPED boundary, not an implementation-neutral one -- a real line, drawn in a place only
+# ZFS has. Under LVM there is no pool for a partition table to precede: a PV is carved, grouped
+# into a VG, and carved again into LVs, and "before the pool exists" names no single point in
+# that lifecycle. The same holds for every other storage architecture a PUBLIC module family
+# cannot enumerate in advance -- a hardware RAID controller presenting one opaque LUN, plain
+# partitions with plain filesystems, btrfs's own multi-device volumes, bcachefs, an iSCSI target
+# somebody else already carved before this host ever saw it. A repo boundary drawn from ONE
+# implementation's lifecycle stages would bake that implementation into the option namespace,
+# which is exactly what a namespace this generic must not do.
 #
-# What IS true independent of implementation is the LAYER, and the layer
-# is what this repo is: storage sits between hosts and the consumers of
-# data, and "which physical device is this" (disks.nix), "how is it
-# carved" (this file), "what shape is the dataset that lands on it"
-# (shape.nix), "who owns it" (reconciler.nix) and "where does it surface"
-# (delivery.nix) are all facts about that ONE layer, however the layer
-# happens to be built underneath. The nixbackup contrast the extraction
-# argued from still holds, and simply points the other way now:
-# nixbackup's three modules (destinations/autobootstrap/monitor) are three
-# enforcement angles on the SAME fact, and these five are five facts about
-# the same LAYER. Neither shape is a reason to split a repo.
+# What IS true independent of implementation is the LAYER, and the layer is what this repo is:
+# storage sits between hosts and the consumers of data, and "which physical device is this"
+# (disks.nix), "how is it carved" (this file), "what shape is the dataset that lands on it"
+# (shape.nix), "who owns it" (reconciler.nix) and "where does it surface" (delivery.nix) are all
+# facts about that ONE layer, however the layer happens to be built underneath.
 #
-# WHAT THE SPLIT COST, AND WHY THE NAMESPACE IS RESTORED TO THE
-# CHARACTER. Consumers in this family read layout by NAME, defensively,
-# the way every cross-module read here works:
-# `config.nixstorage.layout.images or { }`. `nixboot`'s own
-# `esp.fromLayout` and `nixvault`'s own `deviceFromLayout` both do exactly
-# that, and the moment this option root became `nixlayout.images` they
-# resolved to `{ }` -- forever, on every host, with no error and no
-# warning, because `or { }` cannot tell "option absent" from "declared,
-# empty". Shipped features were silently dead for the entire life of the
-# split, and nothing failed loudly enough to say so. That is the specific
-# hazard of a defensive read across an option-path rename: by
-# construction, it cannot fail loudly. Restoring `nixstorage.layout.*`
-# exactly as it was fixes every one of those consumers with zero edits on
-# their side, which is also why this option root must never move again
-# without sweeping them in the same change.
+# ⚠ `nixstorage.layout.*` MUST NEVER MOVE AGAIN WITHOUT SWEEPING EVERY CONSUMER IN THE SAME
+# CHANGE. Consumers in this family read layout by NAME, defensively, the way every cross-module
+# read here works: `config.nixstorage.layout.images or { }`. `nixboot`'s own `esp.fromLayout` and
+# `nixvault`'s own `deviceFromLayout` both do exactly that -- and a defensive read across a
+# renamed option path cannot fail loudly, by construction: `or { }` cannot tell "option absent"
+# from "declared, empty", so a rename here would silently kill every consumer, on every host,
+# with no error and no warning. Any future move of this option root has to update every reader
+# in the same change, or repeat that exact failure.
 #
 # THE SAFETY MODEL, stated once here because every option and every script
 # below exists to uphold it: **nixstorage never touches a block device.**

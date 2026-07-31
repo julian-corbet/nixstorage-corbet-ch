@@ -17,8 +17,7 @@
 # the model" (schema -- what THIS file is) together with "does something
 # act on it" (a service -- what a DIFFERENT file is) inside one option
 # surface. See the repo root README's "The modules" section for the full
-# split and why a single file that wore all of these hats at once was the
-# exact problem this repo was extracted to fix.
+# split.
 #
 # A reconciler consuming THIS module's own data (recordsize/compression) --
 # running the actual `zfs set` calls -- would be a separate module again,

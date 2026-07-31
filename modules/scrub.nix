@@ -8,19 +8,13 @@
 # volumes, so a scrub actually gets a turn on a real host with real
 # contention instead of either hogging it or never running at all.
 #
-# Extracted, with its scheduling semantics preserved on purpose, from a
-# real, already-running private scrub heartbeat that was hardened across
-# an adversarial review before it ever shipped: no priority/ordering
-# mechanism (Nix attrsets have no preserved key order — `attrNames` sorts
-# lexicographically, so "run the SMR drives before the big pool" cannot be
-# encoded by write-order alone), a large sequential-media filesystem
-# (xfs_scrub) that can run for hours with no way to checkpoint it mid-run,
-# a completion check that read "no longer in progress" as "finished" when
-# it could just as easily mean "failed before it started", no mid-nibble
-# re-check of idle conditions, and no thermal awareness at all — added
-# later, once a review found that omitting it would let this module
-# collide with an operator's own existing thermally-paced scrub tooling
-# for a drive-managed-SMR archive drive shared behind one port multiplier.
+# Constraints this scheduling has to satisfy: ordering cannot rely on declaration order (Nix
+# attrsets have no preserved key order -- `attrNames` sorts lexicographically, so "run the SMR
+# drives before the big pool" cannot be encoded by write-order alone -- priority is explicit, see
+# `jobNames` below); xfs_scrub, unlike btrfs/zfs, has no way to checkpoint mid-run, so an xfs job
+# runs to completion within one heartbeat invocation rather than nibbling like the other two; and
+# any job with `tempDevices` set gets continuous thermal monitoring so this module cannot collide
+# with an operator's own separately-paced scrub tooling on a shared, thermally-sensitive drive.
 #
 # A single frequent heartbeat (default every 10 min) checks weekday,
 # system load, available RAM, and — for any job with `tempDevices` set —

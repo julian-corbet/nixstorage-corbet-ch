@@ -10,16 +10,12 @@
 # default.nix's own combined `nixstorage-eval-tests`) plus the two standalone build-proof
 # derivations, which default.nix re-exports by name.
 #
-# THIS FILE, AND THE MODULE IT PROVES, SPENT A WHILE IN A REPO OF ITS OWN. That split (into a
-# standalone `nixlayout` repo, argued from "layout runs pre-pool, while shape/delivery/
-# reconciler all presuppose a pool that already exists") has been REVERSED: "pre-pool vs
-# post-pool" is a ZFS-SHAPED boundary, and under LVM -- or hardware RAID presenting one opaque
-# LUN, or plain partitions, or any of the other storage architectures a public module family
-# cannot enumerate in advance -- there is no equivalent line in the same place. See
-# modules/layout.nix's own header for the full argument. This file is the test-side half of
-# that reversal: it now shares the SAME combined eval-tests run every other module in this
-# repo already contributes to, rather than the standalone eval-config fixtures a separate
-# flake needed when this was `nixlayout`'s own `checks/default.nix`.
+# `layout` lives in this repo rather than its own pre-pool repo because "pre-pool vs post-pool"
+# is a ZFS-SHAPED boundary, and under LVM -- or hardware RAID presenting one opaque LUN, or
+# plain partitions, or any of the other storage architectures a public module family cannot
+# enumerate in advance -- there is no equivalent line in the same place. See
+# modules/layout.nix's own header for the full argument. This file shares the SAME combined
+# eval-tests run every other module in this repo contributes to.
 #
 # EVAL-TIME checks (returned as `results`): each evaluates a real configuration through
 # NixOS's own eval-config.nix and inspects what the module RENDERS, or whether forcing
@@ -70,13 +66,7 @@ let
   # `evalLayoutWithDisks`: layout PLUS the real `nixstorage.disks` table (modules/disks.nix,
   # this same repo) -- used only by the fixtures below that specifically exercise
   # `nixstorage.layout.verify.targets.<n>.fromDisk` resolving against a sibling disks table.
-  #
-  # Before the split was reversed, this fixture had to fake `nixstorage.disks`'s option
-  # surface by hand: `nixlayout` was a standalone repo/flake, and pulling in the real
-  # nixstorage flake as a `checks`-only input would have made a test-only dependency look
-  # like a real one -- this family's own house rule (read a sibling defensively, never as a
-  # flake input) applies in its strongest form to test code. Now that `layout` lives in THIS
-  # repo, `disksModule` is not a foreign table to imitate -- it is the exact same module the
+  # `disksModule` is not a foreign table to imitate -- it is the exact same module the
   # `disks/*` checks above already compose for their own fixtures, so this one just imports
   # it directly, same as they do.
   evalLayoutWithDisks = extraConfig:
@@ -268,9 +258,8 @@ let
     # --- verify.targets.<name>.fromDisk: resolves device by name ------------
     # The whole point of this option (see modules/layout.nix's own header): a verify target
     # can name a nixstorage.disks entry instead of retyping its by-id path a second time, for
-    # the SAME physical disk -- formerly a DIFFERENT repo's own copy of that path, back when
-    # this module was split out as `nixlayout`; now the same repo, disks.nix sitting two
-    # directories away, but the transcription risk `fromDisk` closes is identical either way.
+    # the SAME physical disk -- closing the transcription risk of two independently-typed
+    # copies of one by-id path drifting apart.
     (check "verify/fromDisk-resolves-device-from-nixstorage-disks"
       (
         let

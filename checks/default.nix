@@ -11,10 +11,8 @@
 # A third kind, BUILD-level proofs against a real produced artifact
 # (`layout-image-build-proof`, `layout-verify-detects-drift`, in `./layout.nix`) --
 # `nixstorage.layout` is the one module in this repo that produces a real disk image and
-# reads real (if fake, for testing) media back. This module spent a while extracted into a
-# standalone `nixlayout` repo, on the grounds that layout runs BEFORE any ZFS pool exists
-# while shape/delivery/reconciler all presuppose one that already does. THAT SPLIT IS
-# REVERSED: "pre-pool vs post-pool" is a ZFS-SHAPED boundary, and under LVM -- or any of the
+# reads real (if fake, for testing) media back. It lives here rather than in its own pre-pool
+# repo because "pre-pool vs post-pool" is a ZFS-SHAPED boundary, and under LVM -- or any of the
 # many other storage architectures a public module family cannot enumerate in advance --
 # there is no equivalent line in the same place. See modules/layout.nix's own header for the
 # full argument. `shape`/`delivery` remain pure schema, `reconciler` acts on ownership/mode
@@ -116,18 +114,16 @@ let
         role = "pool-member";
       };
     };
-    # GAINED by the move: this repo's own copy never had `factPaths` at all, so a derivation
-    # sitting in nixstorage.disks -- a package accidentally assigned to `role`, say -- would have
-    # passed silently. `nixstorage.disks` is precisely the fact consumers read BY NAME, so it must
-    # be provably plain data or the by-name discipline rests on nothing.
+    # Without `factPaths`, a derivation sitting in nixstorage.disks -- a package accidentally
+    # assigned to `role`, say -- would pass silently. `nixstorage.disks` is precisely the fact
+    # consumers read BY NAME, so it must be provably plain data or the by-name discipline rests on
+    # nothing.
     factPaths = [ "nixstorage.disks" ];
   };
 
   # ── nixstorage.layout: eval-time checks + the two build-level proofs ────────────────────
-  # See ./layout.nix's own header for the full story -- this module's repo-split history,
-  # and why its eval-time checks now feed the SAME combined `results`/`eval-tests` every
-  # other module in this file already contributes to, rather than a standalone derivation of
-  # their own.
+  # Its eval-time checks feed the SAME combined `results`/`eval-tests` every other module in
+  # this file already contributes to, rather than a standalone derivation of their own.
   layoutChecks = import ./layout.nix {
     inherit pkgs lib nixpkgs system disksModule bareStubs layoutModule;
   };
@@ -237,13 +233,11 @@ let
         '';
 
   # ── the composed-host check: every real, implemented option, once ───────
-  # Unchanged in spirit from this repo's original scaffold check -- still a
-  # `lib.nixosSystem` composing all four modules plus nixiam's posix module
-  # against examples/host/configuration.nix, still discarding the drvPath's
-  # string context so this evaluates a system rather than building one.
-  # nixiam.nixosModules.posix is a real, shipped module as of this check
-  # (see README's Status) -- if that ever regresses, this is the one check
-  # that will say so by refusing to evaluate.
+  # A `lib.nixosSystem` composing all five modules plus nixiam's posix module against
+  # examples/host/configuration.nix, discarding the drvPath's string context so this evaluates a
+  # system rather than building one. nixiam.nixosModules.posix is a real, shipped module (see
+  # README's Status) -- if that ever regresses, this is the one check that will say so by
+  # refusing to evaluate.
   composedHost = lib.nixosSystem {
     inherit system;
     modules = [

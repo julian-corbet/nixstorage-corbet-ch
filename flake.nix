@@ -4,16 +4,12 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
 
-    # nixstorage answers "where and what shape"; nixiam answers "who". A
-    # root's owner/group may be a literal numeric uid/gid, but an app
-    # leaf's identity is ALWAYS a STRING KEY into
-    # `nixiam.posix.identities.<name>`, never a raw uid/gid copied into
-    # this repo -- so the on-disk owner and a workload's securityContext
-    # can never independently drift (see README's "Why nixstorage depends
-    # on nixiam, and never the reverse"). This dependency is permanently
-    # one-way: nixiam must never learn a dataset name or a pool path. The
-    # day it does, the layering this split exists to enforce has already
-    # inverted.
+    # nixstorage answers "where and what shape"; nixiam answers "who". A root's owner/group may
+    # be a literal numeric uid/gid, but an app leaf's identity is ALWAYS a STRING KEY into
+    # `nixiam.posix.identities.<name>`, never a raw uid/gid copied into this repo -- so the
+    # on-disk owner and a workload's securityContext can never independently drift (see README's
+    # "Why nixstorage depends on nixiam, and never the reverse"). This dependency is permanently
+    # one-way: nixiam must never learn a dataset name or a pool path.
     nixiam = {
       url = "github:julian-corbet/nixiam-corbet-ch";
       inputs.nixpkgs.follows = "nixpkgs";
@@ -24,29 +20,28 @@
     # NixOS module, no `enable`, nothing that acts on a host -- and is never composed into
     # anything this flake exports; it is reached only from `checks`.
     #
-    # It is an input rather than a copy because the copy failed. checks/purity.nix used to carry a
-    # hand-kept version of nixtest.lib.mkPurityChecks, and it quietly stopped matching: it never
-    # gained the `factPaths` plain-data proof the original grew, so a derivation sitting in
+    # An input rather than a vendored copy, deliberately: a hand-kept copy of
+    # nixtest.lib.mkPurityChecks silently stopped matching the original once (it never gained the
+    # `factPaths` plain-data proof the real one grew), so a derivation sitting in
     # nixstorage.disks would have passed silently while the check still reported success. One
-    # recipe taken as a dependency cannot drift from itself the way three hand-kept copies did.
+    # recipe taken as a dependency cannot drift from itself the way a hand-kept copy did.
     nixtest = {
       url = "github:julian-corbet/nixtest-corbet-ch";
       inputs.nixpkgs.follows = "nixpkgs";
     };
 
-    # A third category again, distinct from both of the above: nixhost is a lib-only dependency
-    # like nixtest (no NixOS module of ITS shape composed here either), but unlike nixtest it IS
-    # reached from a real exported module, not only from `checks`. `reconciler.nix`'s own
-    # `config.nixiam.posix.identities`/`.groups`/`.podSecurity` reads are exactly the cross-
-    # namespace defensive-read defect class nixhost's `lib.probeFact`/`lib.collectProbes`
-    # (`lib/facts.nix`) exists to fix -- a bare `config.nixfoo.bar or fallback` cannot tell
-    # "nixfoo not composed here" from "nixfoo composed but `bar` moved/renamed/rejected", and the
-    # second one is a real defect this exact shape already cost this family real weeks over
-    # (`nixstorage.layout`, this repo's own README/Status records it). `probeFact`/`collectProbes`
-    # are closed over as plain function arguments when `reconciler.nix` is exported below, never
-    # `_module.args` -- the same partially-applied-before-the-module-system-sees-it pattern this
-    # family already uses for `nixfsCatalogue` (see infra's own flake.nix comment on `mkNixnas` for
-    # that precedent) -- so a consumer importing `nixosModules.reconciler` sees an ordinary module
+    # A third category again: nixhost is a lib-only dependency like nixtest (no NixOS module of
+    # ITS shape composed here), but unlike nixtest it IS reached from a real exported module, not
+    # only from `checks`. `reconciler.nix`'s own `config.nixiam.posix.identities`/`.groups`/
+    # `.podSecurity` reads are exactly the cross-namespace defensive-read defect class nixhost's
+    # `lib.probeFact`/`lib.collectProbes` (`lib/facts.nix`) exists to fix -- a bare
+    # `config.nixfoo.bar or fallback` cannot tell "nixfoo not composed here" from "nixfoo composed
+    # but `bar` moved/renamed/rejected", and the second one already cost this family real weeks
+    # over (`nixstorage.layout`, this repo's own README/Status records it). `probeFact`/
+    # `collectProbes` are closed over as plain function arguments when `reconciler.nix` is
+    # exported below, never `_module.args` -- the same partially-applied-before-the-module-system-
+    # sees-it pattern this family uses for `nixfsCatalogue` (see infra's own flake.nix comment on
+    # `mkNixnas`) -- so a consumer importing `nixosModules.reconciler` sees an ordinary module
     # function and never needs to know `probeFact` exists.
     nixhost = {
       url = "github:julian-corbet/nixhost-corbet-ch";
@@ -62,39 +57,24 @@
       pkgsFor = system: import nixpkgs { inherit system; };
     in
     {
-      # ---------------------------------------------------------------
-      # SIX independently toggleable modules under one `nixstorage.*`
-      # namespace -- same shape as nixbackup's three (destinations/
-      # autobootstrap/monitor). `shape`, `delivery` and `disks` are pure
-      # schema + assertion, no systemd unit, nothing to "enable" -- import
-      # any one on its own to get validated, machine-readable declarations
-      # with zero runtime footprint. `reconciler`, `layout`, and `scrub`
-      # are the three modules that actually act -- `reconciler` on
-      # ownership and top-directory mode only (see README's Status for the
-      # one open gap: nothing yet runs the `zfs set` half `shape.nix`'s
-      # own model describes), `layout` on nothing but READING a live
-      # device back (see modules/layout.nix's own header for the full
-      # safety model -- it never writes to a block device, only ever to a
-      # plain file it builds itself), and `scrub` on an idle-/RAM-/
-      # temperature-gated btrfs/xfs/zfs scrub heartbeat (see
-      # modules/scrub.nix's own header) -- hence `default` for the common
-      # case of wanting all six.
+      # SIX independently toggleable modules under one `nixstorage.*` namespace -- same shape as
+      # nixbackup's three (destinations/autobootstrap/monitor). `shape`, `delivery` and `disks`
+      # are pure schema + assertion, no systemd unit, nothing to "enable" -- import any one on its
+      # own to get validated, machine-readable declarations with zero runtime footprint.
+      # `reconciler`, `layout`, and `scrub` are the three modules that actually act --
+      # `reconciler` on ownership and top-directory mode only (see README's Status for the one
+      # open gap: nothing yet runs the `zfs set` half `shape.nix`'s own model describes), `layout`
+      # on nothing but READING a live device back (see modules/layout.nix's own header for the
+      # full safety model -- it never writes to a block device, only ever to a plain file it
+      # builds itself), and `scrub` on an idle-/RAM-/temperature-gated btrfs/xfs/zfs scrub
+      # heartbeat (see modules/scrub.nix's own header) -- hence `default` for the common case of
+      # wanting all six.
       #
-      # `layout` spent a while extracted out of here into a standalone
-      # `nixlayout` repo, on the grounds that shape/delivery/reconciler all
-      # presuppose an EXISTING dataset while `layout` runs BEFORE any pool
-      # exists. THAT SPLIT IS REVERSED, and the merge is the current
-      # design: "pre-pool vs post-pool" is a ZFS-SHAPED boundary, and under
-      # LVM -- or hardware RAID presenting one opaque LUN, or plain
-      # partitions, or any of the storage architectures a public module
-      # family cannot enumerate in advance -- there is no equivalent line
-      # in the same place. What survives every implementation is the LAYER,
-      # which is what this repo is. See modules/layout.nix's own header for
-      # the full argument, and for what the split cost while it lasted:
-      # consumers reading `config.nixstorage.layout.images or { }` resolved
-      # to `{ }` forever, silently, because a defensive read across an
-      # option-path rename cannot fail loudly.
-      # ---------------------------------------------------------------
+      # `layout` lives here rather than in its own pre-pool repo because "pre-pool vs post-pool"
+      # is a ZFS-SHAPED boundary: under LVM, hardware RAID presenting one opaque LUN, or plain
+      # partitions, there is no equivalent line in the same place. What survives every
+      # implementation is the LAYER, which is what this repo is. See modules/layout.nix's own
+      # header for the full argument.
       nixosModules.shape = ./modules/shape.nix;
       nixosModules.delivery = ./modules/delivery.nix;
       # `probeFact`/`collectProbes` closed over here, before the module system ever sees the
@@ -132,12 +112,6 @@
       # deliberately NOT among these five -- it drives systemd.timers plus a
       # generated heartbeat script against `/proc/loadavg`/`/proc/meminfo`
       # directly, with no system-manager equivalent attempted.
-      #
-      # `disks` was missing from this list entirely from the commit that
-      # introduced modules/disks.nix (it reached nixosModules above, never
-      # here) until this comment was written -- the exact kind of drift a
-      # naming table is supposed to prevent elsewhere, caught here by
-      # nothing more than rereading this file end to end.
       systemManagerModules.shape = ./modules/shape.nix;
       systemManagerModules.delivery = ./modules/delivery.nix;
       # Same closed-over `probeFact`/`collectProbes` as nixosModules.reconciler above -- one
@@ -181,17 +155,10 @@
       # detecting drift). See checks/default.nix for all of it, the same
       # split nixfs/nixvault/nixboot already use in this family.
       #
-      # ⚠ nixiam's own posix/identity module (`nixiam.posix.identities`/
-      # `.groups`/`.podSecurity` -- `modules/reconciler.nix`'s own declared
-      # cross-repo contract, see that file's header) is real and shipped --
-      # this repo's own read path was repointed at it (from an intervening
-      # standalone nixposix repo, itself moved out of and back into nixid,
-      # since renamed nixiam) precisely because nixiam.posix was found NOT
-      # actually declared under the OLD path this file's own `nixid` input
-      # once pointed at, silently resolving `identities`/`groups` to the
-      # empty set. See README's "Why nixstorage depends on nixiam" and
-      # Status section. `github:julian-corbet/nixiam-corbet-ch` above is
-      # now published and resolves normally -- see flake.lock.
+      # ⚠ nixiam's own posix/identity module (`nixiam.posix.identities`/`.groups`/`.podSecurity`
+      # -- `modules/reconciler.nix`'s own declared cross-repo contract, see that file's header) is
+      # real and shipped. `github:julian-corbet/nixiam-corbet-ch` above is published and resolves
+      # normally -- see flake.lock and README's "Why nixstorage depends on nixiam" section.
       checks = forAllSystems (system:
         import ./checks {
           pkgs = pkgsFor system;
