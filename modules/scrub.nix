@@ -298,7 +298,7 @@ let
       # such launch (below) closes this shell's copy in the CHILD only,
       # before it daemonizes, so an orphan can no longer carry the lock
       # away with it.
-      lockfile="/run/nixstorage-scrub-groups/${group:-__solo-$name}.lock"
+      lockfile="/run/nixstorage-scrub-groups/''${group:-__solo-$name}.lock"
       mkdir -p /run/nixstorage-scrub-groups
       exec {fd}>"$lockfile"
       if ! flock -n "$fd"; then

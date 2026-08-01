@@ -210,6 +210,43 @@ let
         })
       )
       "a plain nixstorage.scrub target with no delimiter characters should never fail the build on its own")
+
+    # --- nixstorage.scrub: the group-lock's own bash ${...} survives Nix's antiquotation ---
+    # Regression pin for a real incident (2026-08-01): the lockfile line's
+    # `${group:-__solo-$name}` was written WITHOUT the `''$` escape this module's
+    # heartbeat string needs for a literal bash `${...}` (see the sibling
+    # `''${nibble_min}min''${temp_devices:+...}` a few lines below it, which already
+    # gets this right). Nix silently treats the un-escaped form as string interpolation of
+    # something it can't actually parse as an expression, and rather than erroring, it strips
+    # the braces and leaves the raw text behind -- so the rendered script read
+    # `groups/group:-__solo-$name.lock`, not a real expansion. Bash still happily expanded the
+    # bare `$name` in that leftover text (valid on its own), so every job silently got its own
+    # unique, never-shared lockfile regardless of its declared `group` -- no eval error, no build
+    # failure, fully invisible until the actual runtime lock files were inspected on a live host.
+    # This is exactly the cross-job double-load protection the group mechanism exists for (see
+    # the module header's ASM1166-port-multiplier rationale), so a silent regression here is not
+    # cosmetic.
+    (
+      let
+        grouped = evalScrubOnly {
+          nixstorage.scrub = {
+            enable = true;
+            groups.relay = { };
+            jobs.a = {
+              fsType = "zfs";
+              target = "poolA";
+              group = "relay";
+              minCycleDays = 7;
+            };
+          };
+        };
+        scriptText = builtins.readFile grouped.systemd.services.nixstorage-scrub-heartbeat.serviceConfig.ExecStart;
+        expected = ''groups/''${group:-__solo-$name}.lock'';
+      in
+      check "scrub/group-lockfile-expansion-survives-antiquotation"
+        (lib.strings.hasInfix expected scriptText)
+        "expected the heartbeat script to contain the literal bash expansion 'groups/\${group:-__solo-\$name}.lock' -- if this fails, an un-escaped \${...} is being silently stripped again, and every job (grouped or not) is getting its own private, never-contended lockfile"
+    )
   ];
 
   failed = builtins.filter (r: !r.ok) results;
