@@ -18,15 +18,23 @@
 #
 # A single frequent heartbeat (default every 10 min) checks weekday,
 # system load, available RAM, and — for any job with `tempDevices` set —
-# drive temperature via `smartctl`. If all are comfortable, it advances
-# exactly ONE due job per tick. For btrfs/zfs (which CAN checkpoint) that
-# is one small nibble (default 10 min, re-checked periodically during the
-# nibble), then it stops. For xfs (which CANNOT checkpoint across separate
-# heartbeat invocations) the job instead runs to completion within this
-# one invocation — potentially hours on a multi-TB drive — but is
+# drive temperature via `smartctl`. If all are comfortable, it walks the
+# due jobs in priority order and advances the first one it can. For
+# btrfs/zfs (which CAN checkpoint) that is one small nibble (default 10
+# min, re-checked periodically during the nibble). If that nibble runs to
+# its full budget, the tick ends there — one job, one turn, as before. But
+# if conditions degrade MID-nibble (load/RAM/weekday/temperature) and the
+# job has to pause early, it YIELDS the rest of this tick to the next due
+# job instead of ending the tick — a job that keeps getting cut short
+# right after starting can no longer sit at the front of the priority
+# order and starve everything behind it forever (see "yield on interrupt"
+# below). For xfs (which CANNOT checkpoint across separate heartbeat
+# invocations) the job instead runs to completion within this one
+# invocation — potentially hours on a multi-TB drive — but is
 # continuously monitored and paced with SIGSTOP/SIGCONT if weekday/load/
 # RAM/temperature degrade mid-run, so it is never long-UNWATCHED, just
-# long.
+# long. xfs jobs do NOT yield while paused — see the xfs branch below for
+# why that would cost, not save, progress.
 #
 # SCOPE: this module is NixOS-only (no system-manager backend). It reads
 # `/proc/loadavg`/`/proc/meminfo`, drives `btrfs`/`zpool`/`xfs_scrub`
@@ -259,10 +267,13 @@ let
 
       # Due. If it belongs to a group, try to take the slot WITHOUT blocking
       # -- if busy, skip to the next job this tick rather than waiting.
-      # NOTE (current, honest limitation): only ONE job ever nibbles per
-      # tick regardless of grouping, so a group today is a human-readable
+      # NOTE (current, honest limitation): at most ONE job is ever ACTIVE at
+      # once regardless of grouping, so a group today is a human-readable
       # "these share a resource" label plus a typo-guard, not (yet) a real
-      # concurrency primitive -- see module doc.
+      # concurrency primitive -- see module doc. That's still true even with
+      # yield-on-interrupt below: yielding hands the REST OF THIS TICK to
+      # the next due job in sequence, one at a time, never two jobs running
+      # together.
       fd=
       if [ -n "$group" ]; then
         lockfile="/run/nixstorage-scrub-groups/$group.lock"
@@ -276,13 +287,22 @@ let
       echo "nixstorage-scrub-heartbeat: nibbling $name ($fs_type $target), budget ''${nibble_min}min''${temp_devices:+, thermal-paced}"
       nibble_sec=$((nibble_min * 60))
       done_full=0
+      # Whether this job used its FULL turn (1) or got cut short mid-nibble
+      # by degraded conditions (0). Only btrfs/zfs -- the checkpointable
+      # types -- can go to 0; see their branches. xfs stays 1 unconditionally
+      # (see its branch for why). A 0 makes the loop below YIELD to the next
+      # due job instead of ending the tick here -- this is what stops a
+      # chronically-marginal job (thermally riding the edge every single
+      # nibble) from parking itself at the front of the priority order and
+      # starving every job behind it, tick after tick, indefinitely.
+      nibble_ok=1
 
       case "$fs_type" in
         btrfs)
           if ! btrfs scrub resume -c idle "$target" 2>/dev/null; then
             btrfs scrub start -c idle "$target" 2>/dev/null || true
           fi
-          nibble_sleep "$nibble_sec" "$temp_devices" "$temp_pace_c" || true
+          nibble_sleep "$nibble_sec" "$temp_devices" "$temp_pace_c" || nibble_ok=0
           # Explicit cancel either way -- SAVES progress for the next resume
           # (this is what makes an early bail-out from nibble_sleep safe,
           # whether the reason was load/RAM OR heat: we always pause
@@ -297,7 +317,7 @@ let
           # `zpool scrub <pool>` both starts fresh AND resumes a paused scan
           # -- same command either way, ZFS tells them apart internally.
           zpool scrub "$target" 2>/dev/null || true
-          nibble_sleep "$nibble_sec" "$temp_devices" "$temp_pace_c" || true
+          nibble_sleep "$nibble_sec" "$temp_devices" "$temp_pace_c" || nibble_ok=0
           status_out=$(zpool status "$target" 2>/dev/null)
           if printf '%s' "$status_out" | grep -q "scan:.*in progress"; then
             zpool scrub -p "$target" 2>/dev/null || true
@@ -325,6 +345,17 @@ let
           # safety mechanism instead of a time box. xfs_scrub -n itself
           # media-scans every data sector (not metadata-only), so this can
           # legitimately run for hours on a multi-TB drive.
+          #
+          # This is also why xfs jobs never set nibble_ok=0 to yield: a
+          # SIGSTOPped xfs_scrub is inert (no CPU/IO) but still holds its
+          # slot -- there is no checkpoint to hand off, so "yielding" would
+          # mean either killing it (discarding however many hours of
+          # media-scan progress it already made, the exact outcome
+          # KillMode=process above exists to prevent) or running a second
+          # job concurrently with it (real parallelism, out of scope for a
+          # single serial heartbeat). Pausing in place and waiting it out is
+          # the only progress-safe option, so this branch intentionally
+          # blocks the tick for as long as it takes.
           if [ "$xfs_repair" = "1" ]; then
             xfs_scrub "$target" &
           else
@@ -374,7 +405,13 @@ let
       fi
 
       [ -n "$fd" ] && exec {fd}>&- || true
-      exit 0 # only ONE job progresses per tick, by design
+
+      if [ "$nibble_ok" = "0" ]; then
+        echo "nixstorage-scrub-heartbeat: $name yielded the rest of this tick (interrupted before using its full nibble budget) -- trying the next due job"
+        continue
+      fi
+
+      exit 0 # this job used its full turn -- only ONE job gets a full turn per tick, by design
     done
 
     echo "nixstorage-scrub-heartbeat: nothing due this tick"
@@ -388,20 +425,29 @@ in
 
       A single frequent heartbeat (default every 10 min) checks weekday,
       system load, available RAM, and -- for any job with `tempDevices` set --
-      drive temperature. If all are comfortable, it advances exactly ONE
-      due job. For btrfs/zfs (which CAN checkpoint) that's one small nibble
-      (default 10 min, re-checked periodically during the nibble), then it
-      stops. For xfs (which CANNOT checkpoint across separate heartbeat
-      invocations) the job instead runs to completion within this one
-      invocation -- potentially hours on a multi-TB drive -- but is
-      continuously monitored and paced with SIGSTOP/SIGCONT if weekday/
-      load/RAM/temperature degrade mid-run, so it's never long-UNWATCHED,
-      just long. If conditions are unfavorable at tick start, the tick is a
-      no-op (or, if only one specific job is too hot, a DIFFERENT cooler
-      job may still get a turn). Jobs are tried in PRIORITY order
-      (`priority`, lower first -- NOT declaration order; Nix attrsets don't
-      preserve one) and each has its own cooldown (`minCycleDays`) since
-      its last fully-completed cycle.
+      drive temperature. If all are comfortable, it walks the due jobs in
+      PRIORITY order (`priority`, lower first -- NOT declaration order; Nix
+      attrsets don't preserve one) and advances the first one it can. For
+      btrfs/zfs (which CAN checkpoint) that's one small nibble (default 10
+      min, re-checked periodically during the nibble); if the nibble runs
+      to its full budget, the tick ends there -- one job, one turn. If
+      conditions instead degrade MID-nibble (load/RAM/weekday/temperature),
+      the job pauses cleanly (checkpointed, no progress lost) and YIELDS
+      the rest of the tick to the next due job, rather than ending the tick
+      on a job that barely got started -- so a job that's chronically
+      thermally marginal can't camp at the front of the priority order and
+      starve every job behind it, tick after tick, forever. For xfs (which
+      CANNOT checkpoint across separate heartbeat invocations) the job
+      instead runs to completion within this one invocation -- potentially
+      hours on a multi-TB drive -- but is continuously monitored and paced
+      with SIGSTOP/SIGCONT if weekday/load/RAM/temperature degrade mid-run,
+      so it's never long-UNWATCHED, just long; an xfs job does NOT yield
+      while paused (no checkpoint to hand off -- see the xfs branch's own
+      comment for why that's the safe choice, not an oversight). If
+      conditions are unfavorable at tick start, the tick is a no-op (or, if
+      only one specific job is too hot, a DIFFERENT cooler job may still
+      get a turn). Each job has its own cooldown (`minCycleDays`) since its
+      last fully-completed cycle.
 
       THERMAL: any job with `tempDevices` set gets an external temperature
       gate: read via smartctl, FAIL CLOSED on an unreadable temperature --
@@ -421,10 +467,16 @@ in
       regardless of which pause primitive the filesystem type ends up
       using.
 
-      LIMITATION (current, by design, not yet needed): only one job
-      advances per tick, across the whole host -- `groups` label which jobs
-      share a physical resource and are asserted to exist, but don't yet
-      enable two DIFFERENT groups to progress concurrently.
+      LIMITATION (current, by design): at most one job is ever ACTIVE at a
+      time, across the whole host -- `groups` label which jobs share a
+      physical resource and are asserted to exist, but don't (yet) enable
+      two DIFFERENT groups to progress concurrently. Yield-on-interrupt
+      (above) fixes the STARVATION failure mode this used to allow -- a
+      chronically-interrupted job no longer blocks lower-priority jobs
+      indefinitely -- but it is still serial hand-off, never true
+      concurrency: two groups genuinely capable of running at once (e.g. an
+      SSD mirror sharing nothing physical with an HDD pool) still take
+      turns, not parallel progress.
 
       SCOPE: this module is NixOS-only. A system-manager host manages its
       own scrub scheduling some other way; there is no backend for it here.
