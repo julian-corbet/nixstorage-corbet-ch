@@ -318,13 +318,18 @@ let
       # benign issue) from parking itself at the front of the priority order and
       # starving every job behind it, tick after tick, indefinitely.
       nibble_ok=1
+      # Human-readable reason for a nibble_ok=0 yield, filled in at the
+      # point of failure below -- so the log line at the bottom (shared by
+      # all three fs types) says what ACTUALLY happened instead of one
+      # generic phrase that's only literally true for the nibble case.
+      yield_reason=""
 
       case "$fs_type" in
         btrfs)
           if ! btrfs scrub resume -c idle "$target" {fd}>&- 2>/dev/null; then
             btrfs scrub start -c idle "$target" {fd}>&- 2>/dev/null || true
           fi
-          nibble_sleep "$nibble_sec" "$temp_devices" "$temp_pace_c" || nibble_ok=0
+          nibble_sleep "$nibble_sec" "$temp_devices" "$temp_pace_c" || { nibble_ok=0; yield_reason="interrupted before using its full nibble budget"; }
           # Explicit cancel either way -- SAVES progress for the next resume
           # (this is what makes an early bail-out from nibble_sleep safe,
           # whether the reason was load/RAM OR heat: we always pause
@@ -339,7 +344,7 @@ let
           # `zpool scrub <pool>` both starts fresh AND resumes a paused scan
           # -- same command either way, ZFS tells them apart internally.
           zpool scrub "$target" {fd}>&- 2>/dev/null || true
-          nibble_sleep "$nibble_sec" "$temp_devices" "$temp_pace_c" || nibble_ok=0
+          nibble_sleep "$nibble_sec" "$temp_devices" "$temp_pace_c" || { nibble_ok=0; yield_reason="interrupted before using its full nibble budget"; }
           status_out=$(zpool status "$target" 2>/dev/null)
           if printf '%s' "$status_out" | grep -q "scan:.*in progress"; then
             zpool scrub -p "$target" 2>/dev/null || true
@@ -431,6 +436,7 @@ let
             # to either get fixed (e.g. the offending file renamed) or
             # never complete at all.
             nibble_ok=0
+            yield_reason="exited rc=$rc without a clean pass"
           fi
           ;;
       esac
@@ -443,7 +449,7 @@ let
       exec {fd}>&- # always a real fd now (see allocation above) -- always safe to close
 
       if [ "$nibble_ok" = "0" ]; then
-        echo "nixstorage-scrub-heartbeat: $name yielded the rest of this tick (interrupted before using its full nibble budget) -- trying the next due job"
+        echo "nixstorage-scrub-heartbeat: $name yielded the rest of this tick ($yield_reason) -- trying the next due job"
         continue
       fi
 
