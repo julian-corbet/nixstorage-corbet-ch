@@ -265,8 +265,9 @@ let
         fi
       fi
 
-      # Due. If it belongs to a group, try to take the slot WITHOUT blocking
-      # -- if busy, skip to the next job this tick rather than waiting.
+      # Due. Try to take the group's slot (or, for an ungrouped job, its own
+      # private never-contended lock -- see below) WITHOUT blocking -- if
+      # busy, skip to the next job this tick rather than waiting.
       # NOTE (current, honest limitation): at most ONE job is ever ACTIVE at
       # once regardless of grouping, so a group today is a human-readable
       # "these share a resource" label plus a typo-guard, not (yet) a real
@@ -274,14 +275,29 @@ let
       # yield-on-interrupt below: yielding hands the REST OF THIS TICK to
       # the next due job in sequence, one at a time, never two jobs running
       # together.
-      fd=
-      if [ -n "$group" ]; then
-        lockfile="/run/nixstorage-scrub-groups/$group.lock"
-        mkdir -p /run/nixstorage-scrub-groups
-        exec {fd}>"$lockfile"
-        if ! flock -n "$fd"; then
-          continue
-        fi
+      #
+      # ALWAYS allocate a real fd here, even for group=null (private
+      # lockfile keyed by job name -- nothing else ever contends for it, so
+      # the flock always succeeds instantly; this exists ONLY so `fd` is
+      # always a valid descriptor below, never empty). That matters because
+      # `btrfs scrub start`/`resume` (without `-B`) and a backgrounded
+      # `xfs_scrub &` both daemonize/persist beyond this script's own
+      # lifetime, and a plain fork+exec hands them a COPY of every open fd
+      # unless told otherwise. Confirmed live on corbet-server: a deploy
+      # restarted this unit mid-nibble, KillMode=process (deliberately)
+      # left the btrfs child running, and that orphan inherited the group
+      # lock fd -- permanently holding it (flock is scoped to the open file
+      # description, shared across the fork) and silently starving every
+      # OTHER job in the group for as long as that scrub kept running,
+      # regardless of the yield-on-interrupt fix above. `{fd}>&-` on each
+      # such launch (below) closes this shell's copy in the CHILD only,
+      # before it daemonizes, so an orphan can no longer carry the lock
+      # away with it.
+      lockfile="/run/nixstorage-scrub-groups/${group:-__solo-$name}.lock"
+      mkdir -p /run/nixstorage-scrub-groups
+      exec {fd}>"$lockfile"
+      if ! flock -n "$fd"; then
+        continue
       fi
 
       echo "nixstorage-scrub-heartbeat: nibbling $name ($fs_type $target), budget ''${nibble_min}min''${temp_devices:+, thermal-paced}"
@@ -299,8 +315,8 @@ let
 
       case "$fs_type" in
         btrfs)
-          if ! btrfs scrub resume -c idle "$target" 2>/dev/null; then
-            btrfs scrub start -c idle "$target" 2>/dev/null || true
+          if ! btrfs scrub resume -c idle "$target" {fd}>&- 2>/dev/null; then
+            btrfs scrub start -c idle "$target" {fd}>&- 2>/dev/null || true
           fi
           nibble_sleep "$nibble_sec" "$temp_devices" "$temp_pace_c" || nibble_ok=0
           # Explicit cancel either way -- SAVES progress for the next resume
@@ -316,7 +332,7 @@ let
         zfs)
           # `zpool scrub <pool>` both starts fresh AND resumes a paused scan
           # -- same command either way, ZFS tells them apart internally.
-          zpool scrub "$target" 2>/dev/null || true
+          zpool scrub "$target" {fd}>&- 2>/dev/null || true
           nibble_sleep "$nibble_sec" "$temp_devices" "$temp_pace_c" || nibble_ok=0
           status_out=$(zpool status "$target" 2>/dev/null)
           if printf '%s' "$status_out" | grep -q "scan:.*in progress"; then
@@ -357,9 +373,9 @@ let
           # the only progress-safe option, so this branch intentionally
           # blocks the tick for as long as it takes.
           if [ "$xfs_repair" = "1" ]; then
-            xfs_scrub "$target" &
+            xfs_scrub "$target" {fd}>&- &
           else
-            xfs_scrub -n "$target" &
+            xfs_scrub -n "$target" {fd}>&- &
           fi
           xfs_pid=$!
           # Recorded so a LATER tick (after this one gets killed by systemd,
@@ -404,7 +420,7 @@ let
         echo "nixstorage-scrub-heartbeat: $name completed a full cycle"
       fi
 
-      [ -n "$fd" ] && exec {fd}>&- || true
+      exec {fd}>&- # always a real fd now (see allocation above) -- always safe to close
 
       if [ "$nibble_ok" = "0" ]; then
         echo "nixstorage-scrub-heartbeat: $name yielded the rest of this tick (interrupted before using its full nibble budget) -- trying the next due job"
