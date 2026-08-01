@@ -33,8 +33,13 @@
 # invocation — potentially hours on a multi-TB drive — but is
 # continuously monitored and paced with SIGSTOP/SIGCONT if weekday/load/
 # RAM/temperature degrade mid-run, so it is never long-UNWATCHED, just
-# long. xfs jobs do NOT yield while paused — see the xfs branch below for
-# why that would cost, not save, progress.
+# long. xfs jobs do NOT yield while the process is still alive (running or
+# paused) — see the xfs branch below for why that would cost, not save,
+# progress — but DO yield once it has actually exited without a clean
+# pass (rc != 0), for the same reason an interrupted btrfs/zfs nibble
+# yields: staying "due" forever and re-winning priority every tick is
+# exactly the failure this mechanism exists to prevent, and by the time
+# the process has exited there is no progress left to protect.
 #
 # SCOPE: this module is NixOS-only (no system-manager backend). It reads
 # `/proc/loadavg`/`/proc/meminfo`, drives `btrfs`/`zpool`/`xfs_scrub`
@@ -303,13 +308,14 @@ let
       echo "nixstorage-scrub-heartbeat: nibbling $name ($fs_type $target), budget ''${nibble_min}min''${temp_devices:+, thermal-paced}"
       nibble_sec=$((nibble_min * 60))
       done_full=0
-      # Whether this job used its FULL turn (1) or got cut short mid-nibble
-      # by degraded conditions (0). Only btrfs/zfs -- the checkpointable
-      # types -- can go to 0; see their branches. xfs stays 1 unconditionally
-      # (see its branch for why). A 0 makes the loop below YIELD to the next
-      # due job instead of ending the tick here -- this is what stops a
-      # chronically-marginal job (thermally riding the edge every single
-      # nibble) from parking itself at the front of the priority order and
+      # Whether this attempt made real progress toward a clean cycle (1) or
+      # didn't (0): btrfs/zfs go to 0 when a nibble is cut short mid-flight
+      # by degraded conditions; xfs goes to 0 when the process has actually
+      # exited without a clean pass (rc != 0) -- see each branch. A 0 makes
+      # the loop below YIELD to the next due job instead of ending the tick
+      # here -- this is what stops a chronically-marginal job (thermally
+      # riding the edge every single nibble, or repeatedly finding the same
+      # benign issue) from parking itself at the front of the priority order and
       # starving every job behind it, tick after tick, indefinitely.
       nibble_ok=1
 
@@ -362,16 +368,18 @@ let
           # media-scans every data sector (not metadata-only), so this can
           # legitimately run for hours on a multi-TB drive.
           #
-          # This is also why xfs jobs never set nibble_ok=0 to yield: a
-          # SIGSTOPped xfs_scrub is inert (no CPU/IO) but still holds its
-          # slot -- there is no checkpoint to hand off, so "yielding" would
-          # mean either killing it (discarding however many hours of
-          # media-scan progress it already made, the exact outcome
-          # KillMode=process above exists to prevent) or running a second
-          # job concurrently with it (real parallelism, out of scope for a
-          # single serial heartbeat). Pausing in place and waiting it out is
-          # the only progress-safe option, so this branch intentionally
-          # blocks the tick for as long as it takes.
+          # This is also why xfs never sets nibble_ok=0 WHILE the process is
+          # still alive (paused or running): a SIGSTOPped xfs_scrub is inert
+          # (no CPU/IO) but still holds its slot -- there is no checkpoint to
+          # hand off, so "yielding" mid-run would mean either killing it
+          # (discarding however many hours of media-scan progress it already
+          # made, the exact outcome KillMode=process above exists to
+          # prevent) or running a second job concurrently with it (real
+          # parallelism, out of scope for a single serial heartbeat).
+          # Pausing in place and waiting it out is the only progress-safe
+          # option, so this branch intentionally blocks the tick for as long
+          # as the process is running. Once it has actually EXITED, though,
+          # that constraint is gone -- see the rc check below.
           if [ "$xfs_repair" = "1" ]; then
             xfs_scrub "$target" {fd}>&- &
           else
@@ -411,6 +419,18 @@ let
             done_full=1
           else
             echo "nixstorage-scrub-heartbeat: $name (xfs) exited rc=$rc (nonzero = issues found or error) -- not marking complete"
+            # The process has now genuinely EXITED (not paused, not still
+            # scanning) without producing a clean pass -- so, same as an
+            # interrupted btrfs/zfs nibble, it stays "due" and would
+            # otherwise re-win priority over everything behind it on every
+            # future tick forever (observed live: a single cosmetic
+            # filename warning on `shows` was enough to permanently starve
+            # blackhole/solid, the exact failure this whole mechanism
+            # exists to prevent). Yield the rest of this tick so a
+            # lower-priority job gets a turn instead of waiting on this one
+            # to either get fixed (e.g. the offending file renamed) or
+            # never complete at all.
+            nibble_ok=0
           fi
           ;;
       esac
@@ -458,9 +478,15 @@ in
       hours on a multi-TB drive -- but is continuously monitored and paced
       with SIGSTOP/SIGCONT if weekday/load/RAM/temperature degrade mid-run,
       so it's never long-UNWATCHED, just long; an xfs job does NOT yield
-      while paused (no checkpoint to hand off -- see the xfs branch's own
-      comment for why that's the safe choice, not an oversight). If
-      conditions are unfavorable at tick start, the tick is a no-op (or, if
+      while its process is still alive, running or paused (no checkpoint to
+      hand off -- see the xfs branch's own comment for why that's the safe
+      choice, not an oversight), but DOES yield once it has actually exited
+      without a clean pass (rc != 0) -- otherwise a job that finishes
+      quickly but never comes back clean (e.g. a filesystem warning that
+      won't clear itself) would camp at the front of the priority order
+      exactly like a chronically-interrupted one, just via a different
+      mechanism. If conditions are unfavorable at tick start, the tick is a
+      no-op (or, if
       only one specific job is too hot, a DIFFERENT cooler job may still
       get a turn). Each job has its own cooldown (`minCycleDays`) since its
       last fully-completed cycle.
