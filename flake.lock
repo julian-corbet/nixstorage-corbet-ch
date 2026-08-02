@@ -155,11 +155,11 @@
         "system-manager": "system-manager_2"
       },
       "locked": {
-        "lastModified": 1785407957,
-        "narHash": "sha256-pQz08aTYgo24tB9z+gAf9KYJqcTZ/l47WWcbhBtOTok=",
+        "lastModified": 1785466971,
+        "narHash": "sha256-LEi9IjId7Aq0YmE7YWwKPZa0QsFx4ITyT51bqmnU+cY=",
         "owner": "julian-corbet",
         "repo": "nixiam-corbet-ch",
-        "rev": "342be7cef63dbc06a15a6b50e4f06825d5c7d1cd",
+        "rev": "018fc4ffe646e751b1873d7f6b8c73b09b8a4bb3",
         "type": "github"
       },
       "original": {
@@ -191,11 +191,11 @@
         ]
       },
       "locked": {
-        "lastModified": 1785418816,
-        "narHash": "sha256-2x7/Svox5Yznk2P5OjUg6Xj0yrshLZA4cmFloDZKvSY=",
+        "lastModified": 1785454893,
+        "narHash": "sha256-6+3x58daI3Ti+NXdcrAVugNp+LSxA6cini1p2jvA91g=",
         "owner": "julian-corbet",
         "repo": "nixtest-corbet-ch",
-        "rev": "8d9ae75992e3eff1f5ff3c06cf74b6a44f630bfb",
+        "rev": "d26f171460e00b01be2b4c640e67fdc6f09a0562",
         "type": "github"
       },
       "original": {

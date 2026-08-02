@@ -355,11 +355,23 @@
     example-app = { uid = 3002; variant = "puid"; reconcile = true; };
 
     # uid 26 mirrors a real, common convention (a database engine image's
-    # own baked-in uid). variant = "native" here: this identity's own
-    # consistency is still checked (see reconciler.nix's own comment: the
-    # invariant assertion runs regardless of `reconcile`), even though
-    # `reconcile = false` means none of it is ever actually chowned.
-    example-db = { uid = 26; variant = "native"; reconcile = false; };
+    # own baked-in uid), which is exactly why it carries `encountered`:
+    # nixiam's `identityRange` band (3000-3999) governs numbers WE hand
+    # out, and one an upstream image baked in is not ours to move. Naming
+    # the single identity as encountered is the route nixiam documents for
+    # this; widening the band down to 26 would make it assert nothing about
+    # the three identities above, which is the whole point of having it.
+    #
+    # variant = "native" here: this identity's own consistency is still
+    # checked (see reconciler.nix's own comment: the invariant assertion
+    # runs regardless of `reconcile`), even though `reconcile = false`
+    # means none of it is ever actually chowned.
+    example-db = {
+      uid = 26;
+      encountered = "the database engine's own image runs as 26 and chowns nothing at startup";
+      variant = "native";
+      reconcile = false;
+    };
   };
 
   # ── Stubs NixOS demands of any bootable system ───────────────────────────
