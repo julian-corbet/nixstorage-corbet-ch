@@ -450,7 +450,7 @@ let
           and the medium is not readable as partitioned at all.
 
           Real example from these hosts: the nixnas rescue stick is 512/512, and
-          the Elitebook's NVMe is 4096/4096. The SAME declared layout therefore
+          a laptop's NVMe is 4096/4096. The SAME declared layout therefore
           cannot produce one image serving both -- it needs two, differing only
           in this value.
 

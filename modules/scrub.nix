@@ -288,7 +288,7 @@ let
       # `btrfs scrub start`/`resume` (without `-B`) and a backgrounded
       # `xfs_scrub &` both daemonize/persist beyond this script's own
       # lifetime, and a plain fork+exec hands them a COPY of every open fd
-      # unless told otherwise. Confirmed live on corbet-server: a deploy
+      # unless told otherwise. Confirmed live on a NixOS host: a deploy
       # restarted this unit mid-nibble, KillMode=process (deliberately)
       # left the btrfs child running, and that orphan inherited the group
       # lock fd -- permanently holding it (flock is scoped to the open file
