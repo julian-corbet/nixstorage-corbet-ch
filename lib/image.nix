@@ -26,6 +26,23 @@
 # The two other roles (`raw`, `luks`) get a correctly-sized, correctly-typed
 # slot and nothing else -- this function never writes a single byte into
 # either one's data region.
+#
+# PARTITION IDENTITY IS PINNABLE HERE, AND THAT IS NOT A COSMETIC KNOB. A
+# GPT entry carries a UNIQUE partition GUID (what udev exposes as
+# `/dev/disk/by-partuuid/*` and blkid prints as `PARTUUID=`) that is an
+# entirely separate field from its TYPE GUID, and neither `sgdisk -n` nor
+# an `sfdisk` script line lacking a `uuid=` field reproduces it: both mint
+# a fresh random one on every run. So an image rebuilt from a completely
+# unchanged declaration comes back identical in size, position, type and
+# name -- and DIFFERENT in identity. Anything that recorded the old value
+# then names a partition that no longer exists while the medium is still
+# physically present: no blkid row, no by-partuuid symlink, and boot
+# tooling that refuses to reconcile a boot tree it can no longer resolve.
+# An optional `partUuid` on a partition record closes that -- `-u
+# <n>:<guid>` on the sgdisk path, a `uuid=` field on the 4Kn sfdisk path,
+# and nothing at all when it is unset, which is exactly the behaviour
+# every declaration predating the field already had. See
+# modules/layout.nix's own `partUuid` option for the full failure story.
 { pkgs }:
 
 { name, sizeMiB, partitions, sectorSize ? 512 }:
@@ -64,15 +81,35 @@ let
   # leave `sizeMiB` unset (asserted in modules/layout.nix, not here).
   endArgFor = p: if p.sizeMiB == null then "0" else "+${toString p.sizeMiB}MiB";
 
+  # `p.partUuid or null`, not `p.partUuid`: this builder is ALSO exported
+  # standalone as `lib.buildLayoutImage` (see flake.nix), so its partition
+  # record is a public interface that outside callers hand-write. A field
+  # added later must therefore be optional in the RECORD as well as in the
+  # option -- a caller who has never heard of `partUuid` keeps building
+  # exactly the image they built before. modules/layout.nix always passes
+  # it (its submodule defaults it to `null`).
+  partUuidOf = p: p.partUuid or null;
+
   sgdiskCreateArgs = lib.concatMap
-    (p: [
-      "-n"
-      "${toString p.index}:0:${endArgFor p}"
-      "-t"
-      "${toString p.index}:${p.typeGuid}"
-      "-c"
-      "${toString p.index}:${p.name}"
-    ])
+    (p:
+      [
+        "-n"
+        "${toString p.index}:0:${endArgFor p}"
+        "-t"
+        "${toString p.index}:${p.typeGuid}"
+      ]
+      # `-u` is sgdisk's flag for the partition's UNIQUE GUID -- its
+      # identity, not its type (`-t`, just above, and a different field
+      # entirely). Emitted ONLY when declared: without it sgdisk generates
+      # a fresh random one per run, which stays the default.
+      ++ lib.optionals (partUuidOf p != null) [
+        "-u"
+        "${toString p.index}:${partUuidOf p}"
+      ]
+      ++ [
+        "-c"
+        "${toString p.index}:${p.name}"
+      ])
     indexed;
 
   espPartitions = lib.filter (p: p.formatted == "vfat") indexed;
@@ -116,7 +153,7 @@ pkgs.runCommand "nixstorage-layout-${name}.img"
       if is4k then ''
         sfdisk --sector-size 4096 --label gpt "$out" >&2 <<'SFDISK_EOF'
 ${lib.concatMapStringsSep "\n" (p:
-  "${if p.sizeMiB == null then "" else "size=${toString (p.sizeMiB * 1024 * 1024 / 4096)}, "}type=${p.typeGuid}, name=\"${p.name}\"")
+  "${if p.sizeMiB == null then "" else "size=${toString (p.sizeMiB * 1024 * 1024 / 4096)}, "}type=${p.typeGuid}, ${lib.optionalString (partUuidOf p != null) "uuid=${partUuidOf p}, "}name=\"${p.name}\"")
   indexed}
 SFDISK_EOF
       '' else ''

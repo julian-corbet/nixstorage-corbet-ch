@@ -1,13 +1,14 @@
 # checks/layout.nix
 #
 # The `nixstorage.layout` check group -- eval-time selection/validation checks for
-# modules/layout.nix, PLUS the two BUILD-level proofs `shape`/`delivery`/`disks` have no
-# equivalent of (a real produced artifact: a disk image, and a real, if fake-for-testing,
-# media read-back -- see modules/layout.nix's own header for why `layout` alone among this
+# modules/layout.nix, PLUS the three BUILD-level proofs `shape`/`delivery`/`disks` have no
+# equivalent of (a real produced artifact: a disk image, its partition identities read back
+# out of that image's real GPT, and a real, if fake-for-testing, media read-back -- see
+# modules/layout.nix's own header for why `layout` alone among this
 # repo's five modules needs that). Wired into checks/default.nix as one entry point, the same
 # `results`-list-returning shape checks/purity.nix already uses for its own per-module check
 # group: this file exports `results` (plain eval-time check records, folded into
-# default.nix's own combined `nixstorage-eval-tests`) plus the two standalone build-proof
+# default.nix's own combined `nixstorage-eval-tests`) plus the three standalone build-proof
 # derivations, which default.nix re-exports by name.
 #
 # `layout` lives in this repo rather than its own pre-pool repo because "pre-pool vs post-pool"
@@ -22,11 +23,12 @@
 # `system.build.toplevel` fails. Nothing here boots anything, and nothing here builds a real
 # image -- these are entirely about selection and validation, which are eval-time properties.
 #
-# BUILD-level proofs (`layoutImageBuildProof`, `layoutVerifyDriftProof` below, re-exported by
-# checks/default.nix as `layout-image-build-proof`/`layout-verify-detects-drift`):
+# BUILD-level proofs (`layoutImageBuildProof`, `layoutPartUuidProof`, `layoutVerifyDriftProof`
+# below, re-exported by checks/default.nix as `layout-image-build-proof`/
+# `layout-partuuid-proof`/`layout-verify-detects-drift`):
 # `nixstorage.layout` is the one module in this repo that produces a real artifact (a disk
 # image) and reads real (if fake, for testing) media back, so eval-only tests cannot prove it
-# actually works -- only that it is WIRED to try. These two checks actually run
+# actually works -- only that it is WIRED to try. These three checks actually run
 # `lib/image.nix`'s builder and `modules/layout-verify.sh`'s script, entirely inside the Nix
 # build sandbox, and touch no block device: the "device" under test is a plain file the image
 # builder itself produced, resolved to via a FAKE `readlink` placed ahead of the real one on
@@ -158,6 +160,73 @@ let
         };
       })
       "expected espLabel on a non-esp-role partition to fail the build, but it succeeded")
+
+    # --- partUuid: pins partition IDENTITY (never its type), validated here -
+    # `sgdisk` accepts a malformed -u value, exits 0, and writes whatever hex
+    # digits it scraped out of the string as the identity -- so eval time is
+    # the ONLY place a typo here can still be caught loudly. See
+    # modules/layout.nix's own `partUuid` description for the measurement.
+    (check "partitions/malformed-partUuid-fails-the-build"
+      (layoutBuildFails {
+        nixstorage.layout.images.fixture = {
+          sizeMiB = 8;
+          partitions = [{ name = "a"; role = "raw"; sizeMiB = null; partUuid = "not-a-guid"; }];
+        };
+      })
+      "expected a malformed partUuid to fail the build, but it succeeded")
+
+    # The realistic typo, and the one a loose check would wave through: a
+    # correctly-shaped GUID with one digit lost in transcription.
+    (check "partitions/truncated-partUuid-fails-the-build"
+      (layoutBuildFails {
+        nixstorage.layout.images.fixture = {
+          sizeMiB = 8;
+          partitions = [{ name = "a"; role = "raw"; sizeMiB = null; partUuid = "6f7c1e5a-9b3d-4a20-8f11-2c4d5e6f7a8"; }];
+        };
+      })
+      "expected a partUuid one hex digit short to fail the build, but it succeeded")
+
+    (check "partitions/lowercase-partUuid-builds-fine"
+      (
+        !(layoutBuildFails {
+          nixstorage.layout.images.fixture = {
+            sizeMiB = 8;
+            partitions = [{ name = "a"; role = "raw"; sizeMiB = null; partUuid = "6f7c1e5a-9b3d-4a20-8f11-2c4d5e6f7a8b"; }];
+          };
+        })
+      )
+      "a lowercase 8-4-4-4-12 partUuid (what blkid and udev print) must be accepted")
+
+    (check "partitions/uppercase-partUuid-builds-fine"
+      (
+        !(layoutBuildFails {
+          nixstorage.layout.images.fixture = {
+            sizeMiB = 8;
+            partitions = [{ name = "a"; role = "raw"; sizeMiB = null; partUuid = "6F7C1E5A-9B3D-4A20-8F11-2C4D5E6F7A8B"; }];
+          };
+        })
+      )
+      "an uppercase 8-4-4-4-12 partUuid (what sgdisk -i prints) must be accepted -- GPT stores bytes, case is a display artifact")
+
+    # Deliberately upper vs lower: two spellings of ONE identity, which is
+    # exactly the duplicate a case-sensitive check would let through.
+    (check "partitions/duplicate-partUuid-fails-the-build"
+      (layoutBuildFails {
+        nixstorage.layout.images.fixture = {
+          sizeMiB = 8;
+          partitions = [
+            { name = "a"; role = "raw"; sizeMiB = 2; partUuid = "6f7c1e5a-9b3d-4a20-8f11-2c4d5e6f7a8b"; }
+            { name = "b"; role = "raw"; sizeMiB = null; partUuid = "6F7C1E5A-9B3D-4A20-8F11-2C4D5E6F7A8B"; }
+          ];
+        };
+      })
+      "expected two partitions sharing one partUuid (differing only in case) to fail the build, but it succeeded")
+
+    # The field must stay strictly opt-in: an untouched declaration is
+    # unchanged by its existence, and reads back as null.
+    (check "partitions/partUuid-defaults-to-null"
+      ((lib.elemAt cfg-valid.nixstorage.layout.images.fixture.partitions 0).partUuid == null)
+      "partUuid must default to null (sgdisk/sfdisk keep generating one) -- anything else changes existing declarations")
 
     # --- declared partitions must actually fit the declared image ----------
     (check "partitions/oversized-partitions-fail-the-build"
@@ -378,7 +447,92 @@ let
       touch $out
     '';
 
-  # ── BUILD-level proof #2: nixstorage-layout-verify actually detects a match AND
+  # ── BUILD-level proof #2: a declared partUuid actually reaches the BUILT
+  #    IMAGE's GPT, and SURVIVES A REBUILD -- on both sector-size paths. ──
+  # The eval checks above prove the field is validated; only reading the
+  # identity back out of a real, freshly built GPT proves it was honoured.
+  # Built TWICE from the same declaration (two derivations differing only in
+  # name) because "the value reaches the image" is not the property that
+  # matters -- "a medium rewritten from an unchanged declaration is still the
+  # same medium" is, and one build cannot show that. The two sector sizes are
+  # two entirely different code paths in lib/image.nix (`sgdisk -u` at 512, an
+  # `sfdisk` script `uuid=` field at 4096, which is the DEFAULT), so proving
+  # one is no evidence whatsoever about the other.
+  pinnedPartUuid = "6f7c1e5a-9b3d-4a20-8f11-2c4d5e6f7a8b";
+
+  # One pinned partition and one that never mentions partUuid at all: the
+  # latter proves the field stayed strictly opt-in at the BUILD level too,
+  # and that lib/image.nix's `p.partUuid or null` keeps the standalone
+  # `lib.buildLayoutImage` partition record backwards compatible for callers
+  # who have never heard of this field.
+  partUuidImage = sectorSize: build: buildImage {
+    name = "check-partuuid-${toString sectorSize}-${build}";
+    inherit sectorSize;
+    sizeMiB = 8;
+    partitions = [
+      {
+        name = "pinned";
+        sizeMiB = 2;
+        typeGuid = roleCatalogue.raw.typeGuid;
+        formatted = null;
+        espLabel = null;
+        partUuid = pinnedPartUuid;
+      }
+      {
+        name = "unpinned";
+        sizeMiB = null;
+        typeGuid = roleCatalogue.raw.typeGuid;
+        formatted = null;
+        espLabel = null;
+      }
+    ];
+  };
+
+  layoutPartUuidProof = pkgs.runCommand "nixstorage-layout-partuuid-proof"
+    {
+      nativeBuildInputs = [ pkgs.util-linux pkgs.jq pkgs.coreutils pkgs.gnugrep ];
+    }
+    ''
+      set -euo pipefail
+      want=${pinnedPartUuid}
+      fail=0
+
+      # Compared lower-cased throughout: GPT stores 16 raw bytes, so which
+      # case a given tool prints is a display artifact, never a difference in
+      # identity -- the same reason modules/layout.nix accepts either.
+      check_image() {
+        img="$1"; sector="$2"; label="$3"
+        table="$(sfdisk --sector-size "$sector" --json "$img")"
+        pinned="$(echo "$table" | jq -r '.partitiontable.partitions[0].uuid' | tr 'A-Z' 'a-z')"
+        unpinned="$(echo "$table" | jq -r '.partitiontable.partitions[1].uuid' | tr 'A-Z' 'a-z')"
+
+        [ "$pinned" = "$want" ] \
+          || { echo "FAIL: $label -- pinned partition's PARTUUID is '$pinned', expected '$want'"; fail=1; }
+        echo "$unpinned" | grep -Eq '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' \
+          || { echo "FAIL: $label -- the unpinned partition has no well-formed generated PARTUUID ('$unpinned')"; fail=1; }
+        [ "$unpinned" != "$want" ] \
+          || { echo "FAIL: $label -- the unpinned partition somehow carries the pinned GUID"; fail=1; }
+
+        echo "$label: pinned=$pinned unpinned=$unpinned"
+      }
+
+      check_image ${partUuidImage 512 "a"} 512 "512 (sgdisk -u), build A"
+      check_image ${partUuidImage 512 "b"} 512 "512 (sgdisk -u), build B"
+      check_image ${partUuidImage 4096 "a"} 4096 "4096 (sfdisk uuid=), build A"
+      check_image ${partUuidImage 4096 "b"} 4096 "4096 (sfdisk uuid=), build B"
+
+      [ "$fail" -eq 0 ] || exit 1
+
+      # The unpinned partition's own GUID is deliberately NOT asserted to
+      # differ between builds: that it churns is sgdisk's/sfdisk's default
+      # behaviour, not a property this repo requires of them. What is
+      # asserted is the half that is this repo's business -- a pinned
+      # identity is identical in every build, on every sector-size path.
+      echo "nixstorage-layout: partUuid proof PASSED (a declared partUuid reaches the built GPT unchanged and survives a rebuild, on both the 512/sgdisk and 4096/sfdisk paths; an undeclared one still gets a generated GUID)"
+      touch $out
+    '';
+
+  # ── BUILD-level proof #3: nixstorage-layout-verify actually detects a match AND
   #    a mismatch -- entirely inside the sandbox, no real device.
   # `readlink` is the one syscall-adjacent boundary that would otherwise
   # need a real /dev/disk/by-* entry (which a build sandbox cannot create);
@@ -482,5 +636,5 @@ let
 in
 {
   inherit results;
-  inherit layoutImageBuildProof layoutVerifyDriftProof;
+  inherit layoutImageBuildProof layoutPartUuidProof layoutVerifyDriftProof;
 }

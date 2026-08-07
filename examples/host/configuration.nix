@@ -281,6 +281,17 @@
         role = "esp";
         sizeMiB = 256;
         espLabel = "EXAMPLEESP";
+        # This partition's IDENTITY -- the PARTUUID udev exposes as
+        # /dev/disk/by-partuuid/<this> -- pinned so it survives a rebuild
+        # of this image. NOT the type-GUID, which says what kind of slot
+        # this is and comes from `role` instead. An ESP is the partition
+        # this matters most for: firmware records the ESP's PARTUUID in a
+        # boot entry, so without pinning, rewriting a removable medium
+        # from this very same declaration silently leaves that entry
+        # pointing at a partition that no longer exists -- while the
+        # medium is still plugged in. Placeholder value, like every other
+        # identifier in this example.
+        partUuid = "6f7c1e5a-9b3d-4a20-8f11-2c4d5e6f7a8b";
       }
       {
         name = "pool-member";

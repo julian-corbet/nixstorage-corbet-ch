@@ -369,7 +369,17 @@ nixiam.posix.identities.example-app = { uid = 3002; variant = "native"; };
 nixstorage.layout.images.example-host-disk = {
   sizeMiB = 512;
   partitions = [
-    { name = "ESP"; role = "esp"; sizeMiB = 256; espLabel = "EXAMPLEESP"; }
+    {
+      name = "ESP";
+      role = "esp";
+      sizeMiB = 256;
+      espLabel = "EXAMPLEESP";
+      # Pinned IDENTITY (not type -- that comes from `role`). Without it
+      # every rebuild of this image mints a fresh PARTUUID, and anything
+      # that recorded the old one -- a firmware boot entry above all --
+      # silently points at a partition that no longer exists.
+      partUuid = "6f7c1e5a-9b3d-4a20-8f11-2c4d5e6f7a8b";
+    }
     { name = "pool-member"; role = "raw"; sizeMiB = 128; }
     # The LAST partition in the list, and the only one allowed to leave
     # sizeMiB unset -- consumes whatever remains of the 512 MiB image
@@ -505,7 +515,28 @@ above):
   by hand), `sizeMiB` (MiB, or `null` to consume the remainder of the
   image — legal ONLY for the last entry in the list; asserted),
   `espLabel` (the FAT volume label; only meaningful — and only accepted —
-  when `role = "esp"`; asserted).
+  when `role = "esp"`; asserted), `partUuid` (this partition's unique
+  GUID — see below).
+- `images.<name>.partitions.*.partUuid` (default `null`) — pin this
+  partition's **identity**: the GUID udev exposes as
+  `/dev/disk/by-partuuid/<this>` and `blkid` prints as `PARTUUID=`. Not
+  the *type* GUID, which says what kind of slot this is and comes from
+  `role` instead — every ESP in the world shares one type GUID, while no
+  two partitions anywhere may share a unique GUID. Left `null`,
+  `sgdisk`/`sfdisk` mint a fresh random one per build, so an image
+  rebuilt from an **unchanged** declaration returns identical in size,
+  position, type and name — and different in identity. That break is
+  silent and expensive: a host booting from a removable medium has its
+  firmware boot entry pointing at the ESP's PARTUUID, the medium is
+  rewritten from the same declaration, and the recorded value now
+  resolves to nothing (no `blkid` row, no `by-partuuid` symlink) while
+  the medium is still physically plugged in — leaving boot tooling
+  refusing to touch a boot tree it cannot reconcile, which is enough to
+  block a system rebuild outright. 8-4-4-4-12 hex, either case (asserted;
+  GPT stores 16 raw bytes, so case is a display artifact — `sgdisk -i`
+  prints upper, `blkid` lower), and unique within its image (asserted).
+  Validated at eval because `sgdisk` accepts a malformed `-u` value,
+  exits 0, and silently writes whatever hex it could scrape out of it.
 - `images.<name>.result` — read-only. The built image: a single plain
   FILE, lazily built (declaring an image costs nothing at eval time
   beyond the assertions above; nothing forces `result` merely by

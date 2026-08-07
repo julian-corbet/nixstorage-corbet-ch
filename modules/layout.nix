@@ -165,6 +165,24 @@ let
         misplacedEspLabels =
           filter (p: p.espLabel != null && p.role != "esp") partitions;
 
+        # `builtins.match` anchors the WHOLE string by itself (it returns
+        # null unless the entire value matches), so no ^/$ is needed here,
+        # unlike the `types.strMatching` patterns elsewhere in this file.
+        malformedPartUuids =
+          filter
+            (p: p.partUuid != null && builtins.match "[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}" p.partUuid == null)
+            partitions;
+
+        # Compared case-INSENSITIVELY, for the same reason the format above
+        # accepts either case: a GPT unique GUID is 16 raw bytes, so two
+        # declarations differing only in the case of their hex digits are
+        # not two identities, they are one identity typed twice -- and one
+        # `/dev/disk/by-partuuid` symlink that resolves to whichever of the
+        # two partitions udev happened to see last.
+        declaredPartUuids = map (p: toLower p.partUuid) (filter (p: p.partUuid != null) partitions);
+        partUuidCounts = foldl' (acc: u: acc // { ${u} = (acc.${u} or 0) + 1; }) { } declaredPartUuids;
+        duplicatePartUuids = filter (u: partUuidCounts.${u} > 1) (unique declaredPartUuids);
+
         explicitSizes = map (p: p.sizeMiB) (filter (p: p.sizeMiB != null) partitions);
         explicitSum = foldl' (a: b: a + b) 0 explicitSizes;
         lastIsRemainder = n > 0 && (elemAt partitions (n - 1)).sizeMiB == null;
@@ -217,6 +235,40 @@ let
           an esp-role partition specifically -- it has nothing to label on
           a role that is never formatted vfat at all. Drop espLabel, or set
           role = "esp".
+        '';
+      })
+      ++ (optional (malformedPartUuids != [ ]) {
+        assertion = false;
+        message = ''
+          nixstorage.layout.images."${imageName}" sets a malformed partUuid
+          on partition(s) ${concatMapStringsSep ", " (p: ''"${p.name}" = "${p.partUuid}"'') malformedPartUuids}.
+          A GPT unique partition GUID is 8-4-4-4-12 hexadecimal digits, in
+          either case -- e.g. "6f7c1e5a-9b3d-4a20-8f11-2c4d5e6f7a8b".
+
+          Caught at eval rather than at image-build time because `sgdisk`
+          does NOT reject a malformed -u value: it exits 0 and writes
+          whatever hex digits it could scrape out of the string as this
+          partition's identity, silently (the 4Kn `sfdisk` path, by
+          contrast, refuses the partition outright -- a typo must not
+          decide identity on one path and fail the build on the other).
+          Note that partUuid is the partition's IDENTITY, never its TYPE:
+          if what you meant to pin was the type-GUID, that comes from
+          `role` and is never typed by hand here.
+        '';
+      })
+      ++ (optional (duplicatePartUuids != [ ]) {
+        assertion = false;
+        message = ''
+          nixstorage.layout.images."${imageName}".partitions declares the
+          same partUuid more than once: ${concatStringsSep ", " duplicatePartUuids}
+          (compared case-insensitively -- a GPT unique GUID is 16 raw
+          bytes, so upper and lower case are the same identity). A unique
+          partition GUID is the one field that must differ between any two
+          partitions in existence: two sharing it means one
+          `/dev/disk/by-partuuid` symlink that resolves to whichever of
+          them udev saw last, which is exactly the identity ambiguity
+          pinning partUuid at all is meant to remove. Every ESP on every
+          disk sharing one GUID is the TYPE guid's job (`role`), not this.
         '';
       })
       ++ (optional (image.sizeMiB != null && n > 0 && !fits) {
@@ -383,6 +435,61 @@ let
           ONLY for the LAST partition in the list (asserted); every earlier
           partition needs an explicit size, or "the remainder" would be
           ambiguous about which one it belongs to.
+        '';
+      };
+
+      partUuid = mkOption {
+        type = types.nullOr types.str;
+        default = null;
+        example = "6f7c1e5a-9b3d-4a20-8f11-2c4d5e6f7a8b";
+        description = ''
+          This partition's UNIQUE GUID -- its IDENTITY: the value udev
+          exposes as `/dev/disk/by-partuuid/<this>` and `blkid` prints as
+          `PARTUUID=`.
+
+          NOT the GPT TYPE GUID, which is a different field answering a
+          different question ("what KIND of slot is this" -- an ESP, a
+          Linux filesystem, a LUKS region) and is never typed on this
+          option surface at all: it is resolved from `role` through the
+          fixed catalogue in lib/partition-roles.nix. Every ESP on every
+          disk in the world shares one type GUID; no two partitions
+          anywhere may share a unique GUID. Conflating the two is the
+          obvious mistake this pair of fields invites, so: `role` says
+          what it IS, `partUuid` says WHICH ONE it is.
+
+          Left `null` (the default), `sgdisk`/`sfdisk` mint a fresh random
+          one at build time, and an image rebuilt from an UNCHANGED
+          declaration comes back identical in size, position, type and
+          name -- and different in identity. That is the failure this
+          field exists to prevent, and its whole danger is that it is
+          silent. A host boots from a removable medium whose ESP is
+          partition 1; firmware records that ESP's PARTUUID. The medium is
+          later rewritten from the same declaration. The ESP returns
+          byte-identical in every visible respect under a new identity, so
+          the recorded PARTUUID now resolves to nothing -- no `blkid` row,
+          no `/dev/disk/by-partuuid` symlink -- while the medium is still
+          physically plugged in. Boot tooling then refuses to touch a boot
+          tree it can no longer reconcile, which is enough to block a
+          system rebuild on that host outright. Pinning this is what makes
+          a rebuilt medium the SAME medium.
+
+          8-4-4-4-12 hexadecimal digits, EITHER CASE (asserted, and
+          asserted unique within its image): GPT stores 16 raw bytes, not
+          text, so case is purely a display artifact of whoever printed it
+          -- `sgdisk -i` prints upper, `blkid` and udev print lower, and
+          both transcribe to the same identity. Rejecting one of those two
+          transcriptions would only punish an operator for which tool they
+          copied from.
+
+          Validated here at EVAL time rather than left to the image build,
+          because the two builders disagree about malformed input and one
+          of them disagrees silently: `sgdisk` ACCEPTS a malformed `-u`
+          value, exits 0, and writes whatever hex digits it managed to
+          scrape out of the string as the identity (measured: `not-a-guid`
+          becomes `00000A0A-0000-0000-0000-000000000000`), while the 4Kn
+          `sfdisk` path refuses the partition outright. A typo must not be
+          allowed to decide identity on one path and fail the build on the
+          other.
         '';
       };
 

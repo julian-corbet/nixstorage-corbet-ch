@@ -9,7 +9,8 @@
 #   validation, which are eval-time properties.
 #
 # A third kind, BUILD-level proofs against a real produced artifact
-# (`layout-image-build-proof`, `layout-verify-detects-drift`, in `./layout.nix`) --
+# (`layout-image-build-proof`, `layout-partuuid-proof`, `layout-verify-detects-drift`, in
+# `./layout.nix`) --
 # `nixstorage.layout` is the one module in this repo that produces a real disk image and
 # reads real (if fake, for testing) media back. It lives here rather than in its own pre-pool
 # repo because "pre-pool vs post-pool" is a ZFS-SHAPED boundary, and under LVM -- or any of the
@@ -295,5 +296,6 @@ in
 {
   inherit eval-tests modules-evaluate;
   layout-image-build-proof = layoutChecks.layoutImageBuildProof;
+  layout-partuuid-proof = layoutChecks.layoutPartUuidProof;
   layout-verify-detects-drift = layoutChecks.layoutVerifyDriftProof;
 }
